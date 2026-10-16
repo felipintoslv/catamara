@@ -1245,34 +1245,42 @@
   <!-- Modal Nova Tarefa -->
   <div id="modal-nova-tarefa" class="modal-overlay">
     <div class="modal-box">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h3 style="font-size: 16px; font-weight: 600;">Nova tarefa na Jangada</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="font-size: 16px; font-weight: 600;">Nova Tarefa / Sessao no Catamara</h3>
         <button onclick="fecharModalNovaTarefa()" style="background: none; border: none; color: var(--jangada-texto-suave); cursor: pointer; font-size: 18px;">✕</button>
       </div>
 
       <div class="form-grupo">
-        <label class="form-rotulo">Identificador da Tarefa / Sessao</label>
-        <input type="text" id="nova-tarefa-id" class="form-campo" value="s-nova-feature" placeholder="ex: s-auditoria-seguranca">
+        <label class="form-rotulo">Projeto / Repositorio Git</label>
+        <select id="nova-tarefa-repo-select" class="form-campo" onchange="atualizarRepoCustomizado()">
+          <option value="">Carregando projetos...</option>
+        </select>
+        <input type="text" id="nova-tarefa-repo" class="form-campo" style="margin-top: 6px;" placeholder="ou digite o caminho completo do repositorio">
       </div>
 
       <div class="form-grupo">
-        <label class="form-rotulo">Papel / Agente</label>
-        <select id="nova-tarefa-papel" class="form-campo">
-          <option value="coordenador">Coordenador (Gemini 4 Argon - Conta 1)</option>
-          <option value="implementador">Implementador Delimitado (Gemini 3.8 Flash - Conta 2)</option>
-          <option value="leitor">Leitor de Documentos (Ollama qwen3:4b Local)</option>
-          <option value="revisor">Revisor de Codigo (Claude Opus 3P - Conta 2)</option>
+        <label class="form-rotulo">Identificador da Sessao (opcional)</label>
+        <input type="text" id="nova-tarefa-id" class="form-campo" placeholder="deixe vazio para gerar automaticamente">
+      </div>
+
+      <div class="form-grupo">
+        <label class="form-rotulo">Casco / Modelo Inicial</label>
+        <select id="nova-tarefa-conta" class="form-campo">
+          <option value="conta1">Casco 1: Coordenador (Gemini 4 Argon na conta1)</option>
+          <option value="conta2">Casco 2: Executor (Gemini 3.8 Flash na conta2)</option>
         </select>
       </div>
 
       <div class="form-grupo">
-        <label class="form-rotulo">Instrucao / Prompt Inicial</label>
-        <textarea id="nova-tarefa-prompt" class="form-campo" rows="3" placeholder="Descreva o objetivo da tarefa..."></textarea>
+        <label class="form-rotulo" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 400;">
+          <input type="checkbox" id="nova-tarefa-direto" style="accent-color: var(--jangada-primaria);">
+          Usar pasta direta (sem criar git worktree isolada)
+        </label>
       </div>
 
-      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
         <button class="btn" onclick="fecharModalNovaTarefa()">Cancelar</button>
-        <button class="btn btn-primary" onclick="confirmarNovaTarefa()">Iniciar sessao</button>
+        <button class="btn btn-primary" id="btn-iniciar-sessao" onclick="confirmarNovaTarefa()">Iniciar sessao no terminal</button>
       </div>
     </div>
   </div>
@@ -1490,6 +1498,7 @@
                 <button class="btn btn-sm" onclick="focarJanela('${s.sessao || s.id}')">Focar</button>
                 <button class="btn btn-sm" onclick="abrirWorktree('${s.sessao || s.id}')">Worktree</button>
                 <button class="btn btn-primary btn-sm" onclick="validarNaContaOposta('${s.sessao || s.id}')">Validar</button>
+                ${ativa ? `<button class="btn btn-sm btn-danger" onclick="encerrarSessao('${s.sessao || s.id}')">Encerrar</button>` : ''}
               </div>
             </td>
           `;
@@ -1703,11 +1712,24 @@
       }
     }
 
-    function rejeitarEntrega(id) {
-      if (confirm(`Deseja realmente rejeitar a entrega delimitada ${id}?`)) {
-        const card = document.getElementById(`card-impl-${id}`);
-        if (card) card.remove();
-        showToast(`Entrega ${id} rejeitada.`, "✕");
+    async function rejeitarEntrega(id) {
+      if (!confirm(`Deseja realmente rejeitar a entrega delimitada ${id}?`)) return;
+      showToast(`Rejeitando entrega ${id}...`, "⏳");
+      try {
+        const resp = await fetch('/api/implementacao/rejeitar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: id })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Entrega ${id} rejeitada.`, "✓");
+          atualizarDados();
+        } else {
+          showToast(`Erro ao rejeitar: ${res.erro || 'falha'}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Erro de rede ao rejeitar: ${err.message}`, "✕");
       }
     }
 
@@ -1745,26 +1767,115 @@
       }
     }
 
-    function focarJanela(sessaoId) {
-      showToast(`Foco enviado para janela [${sessaoId}]`, "🖥");
+    async function focarJanela(sessaoId) {
+      showToast(`Focando janela da sessao ${sessaoId}...`, "🖥");
+      try {
+        const resp = await fetch('/api/sessoes/focar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessao: sessaoId })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(res.focado ? `Janela focada com sucesso!` : `Terminal aberto para ${sessaoId}`, "✓");
+        }
+      } catch (err) {
+        showToast(`Erro ao focar: ${err.message}`, "✕");
+      }
     }
 
-    function abrirWorktree(sessaoId) {
-      showToast(`Worktree: ~/.local/share/catamara-worktrees/${sessaoId}`, "📂");
+    async function abrirWorktree(sessaoId) {
+      showToast(`Abrindo terminal na worktree de ${sessaoId}...`, "📂");
+      try {
+        const resp = await fetch('/api/sessoes/worktree', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessao: sessaoId })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Terminal aberto em ${res.worktree}`, "✓");
+        } else {
+          showToast(`Erro: ${res.erro}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Erro ao abrir worktree: ${err.message}`, "✕");
+      }
     }
 
-    function validarNaContaOposta(sessaoId) {
-      showToast(`Disparando catamara-validar para ${sessaoId} na Conta 2...`, "🛡");
-      setTimeout(() => {
-        showToast(`Portao: OK | Parecer na Conta 2: APROVADO`, "✓");
-      }, 1500);
+    async function encerrarSessao(sessaoId) {
+      if (!confirm(`Deseja realmente encerrar a sessao ${sessaoId}?`)) return;
+      showToast(`Encerrando sessao ${sessaoId}...`, "⏳");
+      try {
+        const resp = await fetch('/api/sessoes/encerrar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessao: sessaoId })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Sessao ${sessaoId} encerrada com sucesso.`, "✓");
+          atualizarDados();
+        } else {
+          showToast(`Erro ao encerrar: ${res.erro}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Erro: ${err.message}`, "✕");
+      }
+    }
+
+    async function validarNaContaOposta(sessaoId) {
+      showToast(`Disparando validacao cruzada para ${sessaoId}...`, "🛡");
+      try {
+        const resp = await fetch('/api/validar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ so_deterministico: false })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Validacao concluida com sucesso!`, "✓");
+          atualizarDados();
+        } else {
+          showToast(`Validacao reprovada: ${res.erro || res.codigo}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Erro ao validar: ${err.message}`, "✕");
+      }
     }
 
     function verFotoCongelada() {
       showToast(`Foto congelada em ~/.local/state/catamara/fotos/`, "📸");
     }
 
+    async function carregarProjetos() {
+      const sel = document.getElementById('nova-tarefa-repo-select');
+      if (!sel) return;
+      try {
+        const resp = await fetch('/api/projetos');
+        const dados = await resp.json();
+        sel.innerHTML = '<option value="">-- Selecione um repositorio existente --</option>';
+        (dados.projetos || []).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.caminho;
+          opt.textContent = `${p.nome} (${p.caminho})`;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        sel.innerHTML = '<option value="">Falha ao listar projetos automaticamente</option>';
+      }
+    }
+
+    function atualizarRepoCustomizado() {
+      const sel = document.getElementById('nova-tarefa-repo-select');
+      const inp = document.getElementById('nova-tarefa-repo');
+      if (sel && inp && sel.value) {
+        inp.value = sel.value;
+      }
+    }
+
     function abrirModalNovaTarefa() {
+      carregarProjetos();
       document.getElementById('modal-nova-tarefa').classList.add('open');
     }
 
@@ -1772,11 +1883,46 @@
       document.getElementById('modal-nova-tarefa').classList.remove('open');
     }
 
-    function confirmarNovaTarefa() {
-      const id = document.getElementById('nova-tarefa-id').value;
-      const papel = document.getElementById('nova-tarefa-papel').value;
-      fecharModalNovaTarefa();
-      showToast(`Sessao tmux [${id}] iniciada como [${papel}]!`, "🚀");
+    async function confirmarNovaTarefa() {
+      const repoInp = document.getElementById('nova-tarefa-repo').value.trim();
+      const repoSel = document.getElementById('nova-tarefa-repo-select').value.trim();
+      const repo = repoInp || repoSel;
+      if (!repo) {
+        showToast("Informe ou selecione o repositorio Git!", "⚠️");
+        return;
+      }
+      const sessaoId = document.getElementById('nova-tarefa-id').value.trim();
+      const conta = document.getElementById('nova-tarefa-conta').value;
+      const direto = document.getElementById('nova-tarefa-direto').checked;
+      const btn = document.getElementById('btn-iniciar-sessao');
+      if (btn) btn.disabled = true;
+
+      showToast(`Iniciando sessao para ${repo}...`, "⏳");
+      try {
+        const resp = await fetch('/api/sessoes/iniciar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo: repo,
+            sessao: sessaoId || undefined,
+            conta: conta,
+            direto: direto,
+            abrir_terminal: true
+          })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          fecharModalNovaTarefa();
+          showToast(`Sessao ${res.sessao?.sessao || ''} iniciada no terminal!`, "🚀");
+          setTimeout(atualizarDados, 600);
+        } else {
+          showToast(`Erro: ${res.erro || 'Falha ao iniciar sessao'}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Falha de comunicacao: ${err.message}`, "✕");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
 
     function atualizarRelogio() {

@@ -456,6 +456,42 @@ def aceitar(impl_id: str, entrega_hash: str, repo_caminho: Path | None = None) -
     }
 
 
+def rejeitar(impl_id: str, motivo: str = "rejeitado pelo coordenador") -> dict[str, Any]:
+    if not ID_IMPL_RE.match(impl_id):
+        raise ValueError(f"id de implementacao invalido: {impl_id}")
+
+    pasta_impl = estado_dir() / "implementacoes" / impl_id
+    manifesto_path = pasta_impl / "manifesto.json"
+    entrega_path = pasta_impl / "entrega.json"
+
+    if not manifesto_path.is_file():
+        raise RuntimeError("manifesto nao encontrado para rejeicao")
+
+    manifesto = json.loads(manifesto_path.read_text(encoding="utf-8"))
+    manifesto["estado"] = "rejeitado"
+    manifesto["motivo_rejeicao"] = motivo
+    manifesto_path.write_text(json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    entrega: dict[str, Any] = {}
+    if entrega_path.is_file():
+        try:
+            entrega = json.loads(entrega_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    entrega["aceito"] = False
+    entrega["rejeitado"] = True
+    entrega["motivo_rejeicao"] = motivo
+    entrega["rejeitado_em"] = data_iso_utc()
+    entrega_path.write_text(json.dumps(entrega, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "id": impl_id,
+        "estado": "rejeitado",
+        "motivo": motivo,
+        "rejeitado_em": entrega["rejeitado_em"],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args_list = sys.argv[1:] if argv is None else argv
     if not args_list:

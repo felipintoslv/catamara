@@ -189,51 +189,40 @@ def adicionar_confianca(dirs: dict[str, Path], caminho: Path) -> None:
         pass
 
 
-def subcomando_iniciar(args: argparse.Namespace) -> int:
+def criar_e_iniciar_sessao(
+    repo: str | Path,
+    sessao_id: str | None = None,
+    conta: str | None = None,
+    direto: bool = False,
+    forcar: bool = False,
+    dry_run: bool = False,
+    sem_tmux: bool = False,
+) -> dict[str, Any]:
     dirs = obter_diretorios()
-    repo_arg = args.repo or args.projeto_dir or "."
-    repo_raiz = obter_raiz_git(Path(repo_arg).resolve())
+    repo_raiz = obter_raiz_git(Path(repo).resolve())
     if not repo_raiz:
-        print(f"Erro: {repo_arg} nao pertence a um repositorio Git valido.", file=sys.stderr)
-        return 2
+        raise ValueError(f"{repo} nao pertence a um repositorio Git valido.")
 
     projeto_nome = repo_raiz.name.lower()
     projeto_nome = re.sub(r"[^a-z0-9]", "-", projeto_nome).strip("-") or "projeto"
 
-    sessao_id = args.sessao
     if not sessao_id:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         sessao_id = f"{projeto_nome}-{ts}"
 
-    try:
-        validar_id_sessao(sessao_id)
-    except ValueError as exc:
-        print(f"Erro: {exc}", file=sys.stderr)
-        return 2
+    validar_id_sessao(sessao_id)
 
-    # Verifica se a sessao ja existe
     sessao_json = dirs["sessoes"] / f"{sessao_id}.json"
-    if sessao_json.exists() and not args.forcar:
-        print(
-            f"Erro: Sessao {sessao_id} ja existe. Use 'continuar' ou informe outro nome.",
-            file=sys.stderr,
-        )
-        return 1
+    if sessao_json.exists() and not forcar:
+        raise RuntimeError(f"Sessao {sessao_id} ja existe. Use outro nome ou reative-a.")
 
-    autor_modelo = os.environ.get("CATAMARA_AUTOR_MODELO")
-    if not autor_modelo:
-        # Pega do padrao ou acusa erro se vazio intencional
-        autor_modelo = "gemini-4-argon"
-
+    autor_modelo = os.environ.get("CATAMARA_AUTOR_MODELO") or "gemini-4-argon"
     autor_esforco = os.environ.get("CATAMARA_AUTOR_ESFORCO", "medium")
 
-    # Escolha de conta
-    conta = args.conta
     if not conta:
         conta = escolher_conta_autor(dirs, autor_modelo)
 
-    # Criacao da worktree
-    if args.direto:
+    if direto:
         caminho_worktree = repo_raiz
         ramo_git = None
     else:
@@ -241,7 +230,7 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
         caminho_worktree = dirs["worktrees"] / f"{projeto_nome}-{sessao_id}"
         ramo_git = f"catamara/{sessao_id}"
 
-        if not args.dry_run and not caminho_worktree.exists():
+        if not dry_run and not caminho_worktree.exists():
             proc_wt = subprocess.run(
                 [
                     "git",
@@ -259,14 +248,11 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
                 check=False,
             )
             if proc_wt.returncode != 0:
-                print(
-                    f"Erro ao criar git worktree em {caminho_worktree}: {proc_wt.stderr.strip()}",
-                    file=sys.stderr,
+                raise RuntimeError(
+                    f"Erro ao criar git worktree em {caminho_worktree}: {proc_wt.stderr.strip()}"
                 )
-                return 1
 
-    # Confianca no workspace
-    if not args.dry_run:
+    if not dry_run:
         adicionar_confianca(dirs, caminho_worktree)
 
     tmux_nome = f"{projeto_nome}-{sessao_id}"
@@ -284,14 +270,13 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
         "estado": "ativa",
     }
 
-    if not args.dry_run:
+    if not dry_run:
         dirs["sessoes"].mkdir(parents=True, exist_ok=True)
         sessao_json.write_text(
             json.dumps(dados_sessao, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
 
-    # Monta comando do container isolado
     catamara_isolar = dirs["path"] / "bin" / "catamara-isolar"
     modelo_esforco = f"{autor_modelo}-{autor_esforco}"
     cmd_interno = [
@@ -308,18 +293,11 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
         autor_esforco,
     ]
     cmd_str = shlex.join(cmd_interno)
+    dados_sessao["comando"] = cmd_str
 
-    if args.dry_run or getattr(args, "sem_tmux", False):
-        if args.formato_json:
-            dados_sessao["comando"] = cmd_str
-            print(json.dumps(dados_sessao, ensure_ascii=False, indent=2))
-        else:
-            print(f"Sessao preparada: {sessao_id}")
-            print(f"Worktree: {caminho_worktree}")
-            print(f"Comando: {cmd_str}")
-        return 0
+    if dry_run or sem_tmux:
+        return dados_sessao
 
-    # Inicia no tmux
     tmux_cmd = [
         "tmux",
         "-L",
@@ -338,17 +316,43 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
     ]
     proc_tmux = subprocess.run(tmux_cmd, capture_output=True, text=True, check=False)
     if proc_tmux.returncode != 0:
-        print(f"Erro ao iniciar sessao no tmux: {proc_tmux.stderr.strip()}", file=sys.stderr)
+        raise RuntimeError(f"Erro ao iniciar sessao no tmux: {proc_tmux.stderr.strip()}")
+
+    return dados_sessao
+
+
+def subcomando_iniciar(args: argparse.Namespace) -> int:
+    repo_arg = args.repo or args.projeto_dir or "."
+    try:
+        dados_sessao = criar_e_iniciar_sessao(
+            repo=repo_arg,
+            sessao_id=args.sessao,
+            conta=args.conta,
+            direto=args.direto,
+            forcar=args.forcar,
+            dry_run=args.dry_run,
+            sem_tmux=getattr(args, "sem_tmux", False),
+        )
+    except Exception as exc:
+        print(f"Erro: {exc}", file=sys.stderr)
         return 1
+
+    if args.dry_run or getattr(args, "sem_tmux", False):
+        if args.formato_json:
+            print(json.dumps(dados_sessao, ensure_ascii=False, indent=2))
+        else:
+            print(f"Sessao preparada: {dados_sessao['sessao']}")
+            print(f"Worktree: {dados_sessao['worktree']}")
+            print(f"Comando: {dados_sessao.get('comando', '')}")
+        return 0
 
     if args.formato_json:
         print(json.dumps(dados_sessao, ensure_ascii=False, indent=2))
     else:
-        print(f"Sessao {sessao_id} iniciada com sucesso (tmux: {tmux_nome}).")
+        print(f"Sessao {dados_sessao['sessao']} iniciada com sucesso (tmux: {dados_sessao['tmux']}).")
 
-    # Anexa se houver TTY e nao foi solicitado --sem-anexar
     if sys.stdin.isatty() and not args.sem_anexar:
-        os.execvp("tmux", ["tmux", "-L", "catamara", "attach-session", "-t", tmux_nome])
+        os.execvp("tmux", ["tmux", "-L", "catamara", "attach-session", "-t", dados_sessao["tmux"]])
 
     return 0
 
@@ -436,16 +440,12 @@ def subcomando_continuar(args: argparse.Namespace) -> int:
     return 0
 
 
-def subcomando_encerrar(args: argparse.Namespace) -> int:
+def encerrar_sessao_por_id(
+    sessao_id: str,
+    remover_worktree: bool = False,
+    forcar: bool = False,
+) -> dict[str, Any]:
     dirs = obter_diretorios()
-    sessao_id = args.sessao
-    if not sessao_id and args.sessao_posicional:
-        sessao_id = args.sessao_posicional
-
-    if not sessao_id:
-        print("Erro: informe a sessao a encerrar.", file=sys.stderr)
-        return 2
-
     sessao_json = dirs["sessoes"] / f"{sessao_id}.json"
     dados: dict[str, Any] = {}
     if sessao_json.is_file():
@@ -456,7 +456,6 @@ def subcomando_encerrar(args: argparse.Namespace) -> int:
 
     tmux_nome = dados.get("tmux") or sessao_id
 
-    # Encerra no tmux
     subprocess.run(
         ["tmux", "-L", "catamara", "kill-session", "-t", tmux_nome],
         capture_output=True,
@@ -472,25 +471,37 @@ def subcomando_encerrar(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
 
-    # Opcional: remover worktree
-    if args.remover_worktree:
+    if remover_worktree:
         caminho_worktree = dados.get("worktree")
         repo_caminho = dados.get("repo")
         if caminho_worktree and repo_caminho:
             wt_path = Path(caminho_worktree)
             if wt_path.exists():
                 cmd_rm = ["git", "-C", repo_caminho, "worktree", "remove", str(wt_path)]
-                if args.forcar:
+                if forcar:
                     cmd_rm.append("--force")
-                proc_rm = subprocess.run(cmd_rm, capture_output=True, text=True, check=False)
-                if proc_rm.returncode != 0:
-                    print(
-                        f"Aviso ao remover worktree: {proc_rm.stderr.strip()}",
-                        file=sys.stderr,
-                    )
+                subprocess.run(cmd_rm, capture_output=True, text=True, check=False)
+
+    return {"ok": True, "sessao": sessao_id, "estado": "encerrada"}
+
+
+def subcomando_encerrar(args: argparse.Namespace) -> int:
+    sessao_id = args.sessao
+    if not sessao_id and args.sessao_posicional:
+        sessao_id = args.sessao_posicional
+
+    if not sessao_id:
+        print("Erro: informe a sessao a encerrar.", file=sys.stderr)
+        return 2
+
+    res = encerrar_sessao_por_id(
+        sessao_id=sessao_id,
+        remover_worktree=args.remover_worktree,
+        forcar=args.forcar,
+    )
 
     if args.formato_json:
-        print(json.dumps({"ok": True, "sessao": sessao_id, "estado": "encerrada"}, indent=2))
+        print(json.dumps(res, indent=2))
     else:
         print(f"Sessao {sessao_id} encerrada com sucesso.")
     return 0

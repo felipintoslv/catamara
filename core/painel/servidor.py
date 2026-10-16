@@ -364,6 +364,23 @@ def coletar_estado_painel(repo_caminho: Path | None = None) -> dict[str, Any]:
     }
 
 
+def notificar_waybar() -> None:
+    subprocess.run(["pkill", "-RTMIN+11", "-x", "waybar"], capture_output=True, check=False)
+
+
+def listar_projetos_locais() -> list[dict[str, str]]:
+    base_projetos = Path(os.environ.get("CATAMARA_PROJETOS", Path.home() / "Projetos"))
+    projetos: list[dict[str, str]] = []
+    if base_projetos.is_dir():
+        for item in sorted(base_projetos.iterdir()):
+            if item.is_dir() and (item / ".git").exists():
+                projetos.append({"nome": item.name, "caminho": str(item.resolve())})
+    raiz_cat = str(RAIZ_CATAMARA.resolve())
+    if not any(p["caminho"] == raiz_cat for p in projetos):
+        projetos.insert(0, {"nome": RAIZ_CATAMARA.name, "caminho": raiz_cat})
+    return projetos
+
+
 class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
     """Handler HTTP com endpoints REST para o painel."""
 
@@ -431,6 +448,13 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                 self._enviar_erro(f"falha ao coletar indicadores: {exc}", status=500)
             return
 
+        if rota == "/api/projetos":
+            try:
+                self._enviar_json({"projetos": listar_projetos_locais()})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao listar projetos: {exc}", status=500)
+            return
+
         if rota == "/api/health":
             self._enviar_json({"status": "ok", "app": "catamara"})
             return
@@ -446,10 +470,134 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                 # Consulta forcadamente as cotas ao vivo
                 for c in contas.contas_configuradas():
                     contas.consultar_cotas_conta(c, forcar_atualizacao=True)
+                notificar_waybar()
                 estado = coletar_estado_painel()
                 self._enviar_json({"ok": True, "estado": estado})
             except Exception as exc:
                 self._enviar_erro(f"falha ao atualizar cotas: {exc}", status=500)
+            return
+
+        if rota == "/api/sessoes/iniciar":
+            try:
+                dados = self._ler_corpo_json()
+                repo = dados.get("repo")
+                if not repo:
+                    self._enviar_erro("campo 'repo' eh obrigatorio", status=400)
+                    return
+                sessao_id = dados.get("sessao") or None
+                conta = dados.get("conta") or None
+                direto = bool(dados.get("direto", False))
+                abrir_term = bool(dados.get("abrir_terminal", True))
+
+                res = sessoes.criar_e_iniciar_sessao(
+                    repo=repo,
+                    sessao_id=sessao_id,
+                    conta=conta,
+                    direto=direto,
+                    forcar=False,
+                    dry_run=False,
+                    sem_tmux=False,
+                )
+
+                notificar_waybar()
+
+                if abrir_term:
+                    sid = res["sessao"]
+                    term_cmd = [
+                        "setsid", "-f",
+                        "jangada-terminal",
+                        "--classe", f"catamara-sessao-{sid}",
+                        "--titulo", f"Catamara: {sid}",
+                        "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
+                    ]
+                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                self._enviar_json({"ok": True, "sessao": res})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao iniciar sessao: {exc}", status=400)
+            return
+
+        if rota == "/api/sessoes/focar":
+            try:
+                dados = self._ler_corpo_json()
+                sid = dados.get("sessao")
+                if not sid:
+                    self._enviar_erro("campo 'sessao' obrigatorio", status=400)
+                    return
+
+                focado = False
+                try:
+                    proc_foco = subprocess.run(
+                        ["hyprctl", "dispatch", "focuswindow", f"title:Catamara: {sid}"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if proc_foco.returncode == 0 and "ok" in proc_foco.stdout.lower():
+                        focado = True
+                except Exception:
+                    pass
+
+                if not focado:
+                    term_cmd = [
+                        "setsid", "-f",
+                        "jangada-terminal",
+                        "--classe", f"catamara-sessao-{sid}",
+                        "--titulo", f"Catamara: {sid}",
+                        "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
+                    ]
+                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                self._enviar_json({"ok": True, "sessao": sid, "focado": focado})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao focar sessao: {exc}", status=500)
+            return
+
+        if rota == "/api/sessoes/worktree":
+            try:
+                dados = self._ler_corpo_json()
+                sid = dados.get("sessao")
+                if not sid:
+                    self._enviar_erro("campo 'sessao' obrigatorio", status=400)
+                    return
+                sessao_json = estado_dir() / "sessoes" / f"{sid}.json"
+                wt_dir = None
+                if sessao_json.is_file():
+                    try:
+                        s_data = json.loads(sessao_json.read_text(encoding="utf-8"))
+                        wt_dir = s_data.get("worktree")
+                    except Exception:
+                        pass
+                if not wt_dir or not Path(wt_dir).exists():
+                    self._enviar_erro("worktree nao encontrada", status=404)
+                    return
+
+                term_cmd = [
+                    "setsid", "-f",
+                    "jangada-terminal",
+                    "--classe", f"catamara-worktree-{sid}",
+                    "--titulo", f"Worktree: {sid}",
+                    "-e", "bash", "-c", f"cd '{wt_dir}' && exec bash",
+                ]
+                subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._enviar_json({"ok": True, "worktree": wt_dir})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao abrir worktree: {exc}", status=500)
+            return
+
+        if rota == "/api/sessoes/encerrar":
+            try:
+                dados = self._ler_corpo_json()
+                sid = dados.get("sessao")
+                if not sid:
+                    self._enviar_erro("campo 'sessao' obrigatorio", status=400)
+                    return
+                remover_wt = bool(dados.get("remover_worktree", False))
+                res = sessoes.encerrar_sessao_por_id(sid, remover_worktree=remover_wt)
+                notificar_waybar()
+                self._enviar_json({"ok": True, "resultado": res})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao encerrar sessao: {exc}", status=500)
             return
 
         if rota == "/api/implementacao/aceitar":
@@ -463,9 +611,25 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 repo_path = Path(repo_str) if repo_str else None
                 recibo = implementacao.aceitar(impl_id, entrega_hash, repo_path)
+                notificar_waybar()
                 self._enviar_json({"ok": True, "recibo": recibo})
             except Exception as exc:
                 self._enviar_erro(f"falha ao aceitar implementacao: {exc}", status=400)
+            return
+
+        if rota == "/api/implementacao/rejeitar":
+            try:
+                dados = self._ler_corpo_json()
+                impl_id = dados.get("id")
+                if not impl_id:
+                    self._enviar_erro("campo 'id' eh obrigatorio", status=400)
+                    return
+                motivo = dados.get("motivo", "rejeitado na central grafica")
+                recibo = implementacao.rejeitar(impl_id, motivo=motivo)
+                notificar_waybar()
+                self._enviar_json({"ok": True, "recibo": recibo})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao rejeitar implementacao: {exc}", status=400)
             return
 
         if rota == "/api/validar":
@@ -476,6 +640,7 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                 if so_det:
                     cmd.append("--so-deterministico")
                 proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                notificar_waybar()
                 saida_json = None
                 try:
                     saida_json = json.loads(proc.stdout)
