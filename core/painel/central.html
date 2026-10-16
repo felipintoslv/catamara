@@ -1255,12 +1255,12 @@
         <select id="nova-tarefa-repo-select" class="form-campo" onchange="atualizarRepoCustomizado()">
           <option value="">Carregando projetos...</option>
         </select>
-        <input type="text" id="nova-tarefa-repo" class="form-campo" style="margin-top: 6px;" placeholder="ou digite o caminho completo do repositorio">
+        <input type="text" id="nova-tarefa-repo" class="form-campo" style="margin-top: 6px;" placeholder="ou digite o caminho completo do repositorio" oninput="atualizarPreviewDestino()">
       </div>
 
       <div class="form-grupo">
         <label class="form-rotulo">Identificador da Sessao (opcional)</label>
-        <input type="text" id="nova-tarefa-id" class="form-campo" placeholder="deixe vazio para gerar automaticamente">
+        <input type="text" id="nova-tarefa-id" class="form-campo" placeholder="deixe vazio para gerar automaticamente" oninput="atualizarPreviewDestino()">
       </div>
 
       <div class="form-grupo">
@@ -1273,9 +1273,20 @@
 
       <div class="form-grupo">
         <label class="form-rotulo" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 400;">
-          <input type="checkbox" id="nova-tarefa-direto" style="accent-color: var(--jangada-primaria);">
+          <input type="checkbox" id="nova-tarefa-direto" style="accent-color: var(--jangada-primaria);" onchange="atualizarPreviewDestino()">
           Usar pasta direta (sem criar git worktree isolada)
         </label>
+      </div>
+
+      <!-- Preview de destino da pasta -->
+      <div id="preview-destino-container" style="background: var(--jangada-fundo); border: 1px solid var(--jangada-borda); border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 12px;">
+        <div style="color: var(--jangada-texto-suave); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">Destino onde a pasta sera criada:</div>
+        <div id="preview-destino-caminho" style="font-family: var(--fonte-mono); color: var(--jangada-primaria); word-break: break-all; font-weight: 500;">
+          ~/.local/share/catamara-worktrees/...
+        </div>
+        <div id="preview-destino-detalhe" style="color: var(--jangada-texto-suave); margin-top: 5px; font-size: 11px; line-height: 1.4;">
+          Copia isolada via Git worktree. Seu repositorio original permanece seguro e sem alteracoes diretas.
+        </div>
       </div>
 
       <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
@@ -1866,16 +1877,42 @@
       }
     }
 
+    function atualizarPreviewDestino() {
+      const repoInp = document.getElementById('nova-tarefa-repo')?.value.trim() || '';
+      const repoSel = document.getElementById('nova-tarefa-repo-select')?.value.trim() || '';
+      const repo = repoInp || repoSel || '/home/felipinto/Projetos/projeto';
+      const direto = document.getElementById('nova-tarefa-direto')?.checked;
+      const sessaoIdInp = document.getElementById('nova-tarefa-id')?.value.trim() || '';
+
+      const partes = repo.replace(/\/+$/, '').split('/');
+      const nomeProjeto = partes[partes.length - 1] || 'projeto';
+      const sid = sessaoIdInp || `${nomeProjeto}-<timestamp>`;
+
+      const elCaminho = document.getElementById('preview-destino-caminho');
+      const elDetalhe = document.getElementById('preview-destino-detalhe');
+      if (!elCaminho || !elDetalhe) return;
+
+      if (direto) {
+        elCaminho.textContent = repo;
+        elDetalhe.innerHTML = `<strong>Modo direto ativo:</strong> o agente atuara diretamente na pasta raiz do seu repositorio original (sem branch temporario ou worktree separada).`;
+      } else {
+        elCaminho.textContent = `~/.local/share/catamara-worktrees/${nomeProjeto}-${sid}/`;
+        elDetalhe.innerHTML = `<strong>Worktree isolada:</strong> sera criada uma copia leve do repositorio com a branch temporaria <code style="color:var(--jangada-primaria)">catamara/${sid}</code>. Seu projeto em <em>${repo}</em> fica protegido e intacto.`;
+      }
+    }
+
     function atualizarRepoCustomizado() {
       const sel = document.getElementById('nova-tarefa-repo-select');
       const inp = document.getElementById('nova-tarefa-repo');
       if (sel && inp && sel.value) {
         inp.value = sel.value;
       }
+      atualizarPreviewDestino();
     }
 
     function abrirModalNovaTarefa() {
-      carregarProjetos();
+      carregarProjetos().then(() => atualizarPreviewDestino());
+      atualizarPreviewDestino();
       document.getElementById('modal-nova-tarefa').classList.add('open');
     }
 
