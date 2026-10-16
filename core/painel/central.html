@@ -2040,6 +2040,9 @@
     }
 
     setInterval(atualizarRelogio, 1000);
+    setInterval(() => {
+      if (modoFonteAtual === 'vivo' && !document.hidden) atualizarDados();
+    }, 15000);
     atualizarRelogio();
 
     // Inicializacao

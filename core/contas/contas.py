@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -400,15 +401,61 @@ def cota_efetiva_familia(piscinas: dict[str, dict[str, Any]], familia: str) -> f
     return min(valores)
 
 
+def _cache_cota_obsoleto(conta: str, ttl_segundos: int) -> bool:
+    cache_arq = _caminho_cache_cota(conta)
+    try:
+        cached = json.loads(cache_arq.read_text(encoding="utf-8"))
+        return int(time.time()) - int(cached.get("atualizado_em_epoch", 0)) > ttl_segundos
+    except Exception:
+        return True
+
+
+def disparar_atualizacao_cotas_em_segundo_plano(conta: str) -> bool:
+    """Dispara a consulta de cotas desacoplada (sem bloquear o chamador).
+
+    Usa um arquivo de trava com validade de 90 s para nao empilhar consultas e,
+    ao terminar, avisa a waybar (sinal 11) para redesenhar o indicador.
+    """
+    validar_nome_conta(conta)
+    trava = estado_dir() / "cotas" / f".{conta}.atualizando"
+    try:
+        trava.parent.mkdir(parents=True, exist_ok=True)
+        if trava.exists() and time.time() - trava.stat().st_mtime < 90:
+            return False
+        trava.touch()
+    except OSError:
+        return False
+    script = Path(__file__).resolve()
+    cmd = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(script))} cotas {shlex.quote(conta)} "
+        f">/dev/null 2>&1; rm -f {shlex.quote(str(trava))}; pkill -RTMIN+11 -x waybar 2>/dev/null; true"
+    )
+    try:
+        subprocess.Popen(
+            ["bash", "-c", cmd],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except OSError:
+        return False
+
+
 def status_conta(conta: str, consultar_remoto: bool = False) -> dict[str, Any]:
     pasta = pasta_conta(conta)
     token_arq = pasta / "antigravity-oauth-token"
     ident = extrair_identidade_token(token_arq)
     workspaces = ler_workspaces_confiaveis(conta)
+    ttl_cota = int(os.environ.get("CATAMARA_COTA_CACHE_TTL", "180"))
+    if not consultar_remoto and ident["autenticada"] and _cache_cota_obsoleto(conta, ttl_cota):
+        # Cache velho: serve o que existe agora e renova em segundo plano.
+        disparar_atualizacao_cotas_em_segundo_plano(conta)
     cotas = consultar_cotas_conta(
         conta,
         forcar_atualizacao=consultar_remoto,
-        ttl_segundos=180 if consultar_remoto else 86400,
+        ttl_segundos=180 if consultar_remoto else 10**9,
     )
     piscinas = cotas.get("piscinas", {}) if isinstance(cotas, dict) else {}
     resumo_cotas = {
