@@ -61,13 +61,39 @@ def obter_diretorios() -> dict[str, Path]:
             str(catamara_path / "core"),
         )
     )
+    projetos_dir = Path(
+        os.environ.get(
+            "CATAMARA_PROJETOS",
+            Path.home() / "Projetos",
+        )
+    )
     return {
         "path": catamara_path,
         "estado": estado_dir,
         "sessoes": sessoes_dir,
         "worktrees": worktrees_dir,
         "core_py": core_py,
+        "projetos": projetos_dir,
     }
+
+
+def inicializar_novo_repo_git(caminho: Path, nome_projeto: str) -> Path:
+    """Inicializa um novo repositorio Git com commit inicial limpo."""
+    if caminho.is_file() and caminho.stat().st_size == 0:
+        caminho.unlink()
+    caminho.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(caminho), "init", "-b", "main"], capture_output=True, check=False)
+    subprocess.run(["git", "-C", str(caminho), "checkout", "-B", "main"], capture_output=True, check=False)
+    readme = caminho / "README.md"
+    if not readme.exists():
+        readme.write_text(f"# {nome_projeto}\n\nProjeto gerenciado com Catamara.\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(caminho), "add", "README.md"], capture_output=True, check=False)
+        subprocess.run(
+            ["git", "-C", str(caminho), "commit", "-m", "feat: commit inicial do projeto"],
+            capture_output=True,
+            check=False,
+        )
+    return caminho.resolve()
 
 
 def obter_raiz_git(caminho: Path) -> Path | None:
@@ -197,11 +223,24 @@ def criar_e_iniciar_sessao(
     forcar: bool = False,
     dry_run: bool = False,
     sem_tmux: bool = False,
+    criar_se_nao_existir: bool = True,
 ) -> dict[str, Any]:
     dirs = obter_diretorios()
-    repo_raiz = obter_raiz_git(Path(repo).resolve())
+    repo_str = str(repo).strip()
+    if not repo_str or repo_str == ".":
+        caminho_repo = Path.cwd().resolve()
+    elif not os.path.isabs(repo_str) and not repo_str.startswith("~") and "/" not in repo_str:
+        caminho_repo = (dirs["projetos"] / repo_str).resolve()
+    else:
+        caminho_repo = Path(os.path.expanduser(repo_str)).resolve()
+
+    repo_raiz = obter_raiz_git(caminho_repo)
     if not repo_raiz:
-        raise ValueError(f"{repo} nao pertence a um repositorio Git valido.")
+        if criar_se_nao_existir:
+            nome_proj = caminho_repo.name
+            repo_raiz = inicializar_novo_repo_git(caminho_repo, nome_proj)
+        else:
+            raise ValueError(f"{caminho_repo} nao pertence a um repositorio Git valido.")
 
     projeto_nome = repo_raiz.name.lower()
     projeto_nome = re.sub(r"[^a-z0-9]", "-", projeto_nome).strip("-") or "projeto"

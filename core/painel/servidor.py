@@ -487,6 +487,7 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                 sessao_id = dados.get("sessao") or None
                 conta = dados.get("conta") or None
                 direto = bool(dados.get("direto", False))
+                criar_se_nao_existir = bool(dados.get("criar_se_nao_existir", True))
                 abrir_term = bool(dados.get("abrir_terminal", True))
 
                 res = sessoes.criar_e_iniciar_sessao(
@@ -497,6 +498,7 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                     forcar=False,
                     dry_run=False,
                     sem_tmux=False,
+                    criar_se_nao_existir=criar_se_nao_existir,
                 )
 
                 notificar_waybar()

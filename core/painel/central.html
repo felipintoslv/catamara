@@ -1251,11 +1251,31 @@
       </div>
 
       <div class="form-grupo">
-        <label class="form-rotulo">Projeto / Repositorio Git</label>
-        <select id="nova-tarefa-repo-select" class="form-campo" onchange="atualizarRepoCustomizado()">
-          <option value="">Carregando projetos...</option>
-        </select>
-        <input type="text" id="nova-tarefa-repo" class="form-campo" style="margin-top: 6px;" placeholder="ou digite o caminho completo do repositorio" oninput="atualizarPreviewDestino()">
+        <label class="form-rotulo">Tipo de Projeto</label>
+        <div style="display: flex; gap: 18px; margin-bottom: 8px;">
+          <label style="font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="radio" name="modo-projeto" id="modo-proj-existente" checked onchange="alternarModoProjeto('existente')">
+            Selecionar existente
+          </label>
+          <label style="font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="radio" name="modo-projeto" id="modo-proj-novo" onchange="alternarModoProjeto('novo')">
+            Criar nova pasta / projeto
+          </label>
+        </div>
+
+        <div id="campo-proj-existente">
+          <select id="nova-tarefa-repo-select" class="form-campo" onchange="atualizarRepoCustomizado()">
+            <option value="">Carregando projetos...</option>
+          </select>
+          <input type="text" id="nova-tarefa-repo" class="form-campo" style="margin-top: 6px;" placeholder="ou digite o caminho completo de outro repositorio" oninput="atualizarPreviewDestino()">
+        </div>
+
+        <div id="campo-proj-novo" style="display: none;">
+          <input type="text" id="nova-tarefa-nome-novo" class="form-campo" placeholder="Nome da nova pasta (ex: Arch_Waybar)" oninput="atualizarNomeNovaPasta()">
+          <div style="font-size: 11px; color: var(--jangada-texto-suave); margin-top: 5px;">
+            Sera criada em <code style="color:var(--jangada-primaria)" id="caminho-novo-base">~/Projetos/</code> e inicializada com Git automaticamente.
+          </div>
+        </div>
       </div>
 
       <div class="form-grupo">
@@ -1877,10 +1897,38 @@
       }
     }
 
+    let modoProjetoAtual = 'existente';
+
+    function alternarModoProjeto(modo) {
+      modoProjetoAtual = modo;
+      const campoExistente = document.getElementById('campo-proj-existente');
+      const campoNovo = document.getElementById('campo-proj-novo');
+      if (modo === 'novo') {
+        if (campoExistente) campoExistente.style.display = 'none';
+        if (campoNovo) campoNovo.style.display = 'block';
+        document.getElementById('nova-tarefa-nome-novo')?.focus();
+      } else {
+        if (campoExistente) campoExistente.style.display = 'block';
+        if (campoNovo) campoNovo.style.display = 'none';
+      }
+      atualizarPreviewDestino();
+    }
+
+    function atualizarNomeNovaPasta() {
+      atualizarPreviewDestino();
+    }
+
     function atualizarPreviewDestino() {
-      const repoInp = document.getElementById('nova-tarefa-repo')?.value.trim() || '';
-      const repoSel = document.getElementById('nova-tarefa-repo-select')?.value.trim() || '';
-      const repo = repoInp || repoSel || '/home/felipinto/Projetos/projeto';
+      let repo = '';
+      if (modoProjetoAtual === 'novo') {
+        const nomeNovo = document.getElementById('nova-tarefa-nome-novo')?.value.trim() || 'meu-projeto';
+        repo = `/home/felipinto/Projetos/${nomeNovo}`;
+      } else {
+        const repoInp = document.getElementById('nova-tarefa-repo')?.value.trim() || '';
+        const repoSel = document.getElementById('nova-tarefa-repo-select')?.value.trim() || '';
+        repo = repoInp || repoSel || '/home/felipinto/Projetos/projeto';
+      }
+
       const direto = document.getElementById('nova-tarefa-direto')?.checked;
       const sessaoIdInp = document.getElementById('nova-tarefa-id')?.value.trim() || '';
 
@@ -1892,12 +1940,22 @@
       const elDetalhe = document.getElementById('preview-destino-detalhe');
       if (!elCaminho || !elDetalhe) return;
 
-      if (direto) {
-        elCaminho.textContent = repo;
-        elDetalhe.innerHTML = `<strong>Modo direto ativo:</strong> o agente atuara diretamente na pasta raiz do seu repositorio original (sem branch temporario ou worktree separada).`;
+      if (modoProjetoAtual === 'novo') {
+        if (direto) {
+          elCaminho.textContent = repo;
+          elDetalhe.innerHTML = `<strong>Nova pasta e projeto Git:</strong> a pasta <em>${repo}</em> sera criada e inicializada com Git (README e commit inicial). A sessao atuara diretamente nela.`;
+        } else {
+          elCaminho.textContent = `~/.local/share/catamara-worktrees/${nomeProjeto}-${sid}/`;
+          elDetalhe.innerHTML = `<strong>Nova pasta e Worktree:</strong> a pasta <em>${repo}</em> sera criada como repositorio Git base e a sessao rodara na worktree isolada temporaria.`;
+        }
       } else {
-        elCaminho.textContent = `~/.local/share/catamara-worktrees/${nomeProjeto}-${sid}/`;
-        elDetalhe.innerHTML = `<strong>Worktree isolada:</strong> sera criada uma copia leve do repositorio com a branch temporaria <code style="color:var(--jangada-primaria)">catamara/${sid}</code>. Seu projeto em <em>${repo}</em> fica protegido e intacto.`;
+        if (direto) {
+          elCaminho.textContent = repo;
+          elDetalhe.innerHTML = `<strong>Modo direto ativo:</strong> o agente atuara diretamente na pasta raiz do seu repositorio original (sem branch temporario ou worktree separada).`;
+        } else {
+          elCaminho.textContent = `~/.local/share/catamara-worktrees/${nomeProjeto}-${sid}/`;
+          elDetalhe.innerHTML = `<strong>Worktree isolada:</strong> sera criada uma copia leve do repositorio com a branch temporaria <code style="color:var(--jangada-primaria)">catamara/${sid}</code>. Seu projeto em <em>${repo}</em> fica protegido e intacto.`;
+        }
       }
     }
 
@@ -1911,6 +1969,7 @@
     }
 
     function abrirModalNovaTarefa() {
+      alternarModoProjeto('existente');
       carregarProjetos().then(() => atualizarPreviewDestino());
       atualizarPreviewDestino();
       document.getElementById('modal-nova-tarefa').classList.add('open');
@@ -1921,12 +1980,22 @@
     }
 
     async function confirmarNovaTarefa() {
-      const repoInp = document.getElementById('nova-tarefa-repo').value.trim();
-      const repoSel = document.getElementById('nova-tarefa-repo-select').value.trim();
-      const repo = repoInp || repoSel;
-      if (!repo) {
-        showToast("Informe ou selecione o repositorio Git!", "⚠️");
-        return;
+      let repo = '';
+      if (modoProjetoAtual === 'novo') {
+        const nomeNovo = document.getElementById('nova-tarefa-nome-novo').value.trim();
+        if (!nomeNovo) {
+          showToast("Informe o nome da nova pasta / projeto!", "⚠️");
+          return;
+        }
+        repo = `/home/felipinto/Projetos/${nomeNovo}`;
+      } else {
+        const repoInp = document.getElementById('nova-tarefa-repo').value.trim();
+        const repoSel = document.getElementById('nova-tarefa-repo-select').value.trim();
+        repo = repoInp || repoSel;
+        if (!repo) {
+          showToast("Informe ou selecione o repositorio Git!", "⚠️");
+          return;
+        }
       }
       const sessaoId = document.getElementById('nova-tarefa-id').value.trim();
       const conta = document.getElementById('nova-tarefa-conta').value;
@@ -1944,6 +2013,7 @@
             sessao: sessaoId || undefined,
             conta: conta,
             direto: direto,
+            criar_se_nao_existir: true,
             abrir_terminal: true
           })
         });
