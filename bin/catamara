@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Ponto de entrada principal da interface de linha de comando do Catamara.
+
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+source "$SCRIPT_DIR/catamara-config"
+
+mostrar_ajuda() {
+  cat <<'EOF'
+Uso: catamara <subcomando> [argumentos...]
+     cata <subcomando> [argumentos...]
+
+Subcomandos disponiveis:
+  orient       Exibe orientacao contextual do repositorio e contas
+  doctor       Diagnostico de integridade e requisitos do sistema
+  conta        Gerenciamento de contas, credenciais e cotas
+  isolar       Executa comando isolado em sandbox bubblewrap
+  delegar      Delega subtarefa especializada a modelo local ou agente
+  validar      Valida qualidade de codigo com checagens e revisao
+  iniciar      Inicia sessao em worktree isolada e container tmux (alias: run)
+  continuar    Retoma sessao existente (alias: continue)
+  sessoes      Lista ou gerencia sessoes ativas (alias: sessions)
+  tarefas      Central de tarefas e painel operacional (alias: painel)
+  config       Exibe variaveis de configuracao resolvidas
+
+Opcoes globais:
+  -h, --ajuda, --help   Exibe esta mensagem de ajuda
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  mostrar_ajuda
+  exit 0
+fi
+
+subcomando="$1"
+shift
+
+case "$subcomando" in
+  -h|--ajuda|--help|ajuda)
+    mostrar_ajuda
+    exit 0
+    ;;
+
+  orient)
+    exec python3 "$CATAMARA_CORE_PY/orquestracao/orient.py" "$@"
+    ;;
+
+  doctor)
+    exec python3 "$CATAMARA_CORE_PY/orquestracao/doctor.py" "$@"
+    ;;
+
+  conta)
+    if [[ $# -eq 0 ]]; then
+      exec python3 "$CATAMARA_CORE_PY/contas/contas.py" status
+    fi
+    acao="$1"
+    if [[ "$acao" == "login" ]]; then
+      shift
+      conta_alvo="${1:-$CATAMARA_CONTA_PADRAO}"
+      if ! catamara_pasta_conta "$conta_alvo" >/dev/null 2>&1; then
+        echo "Erro: nome de conta invalido: '$conta_alvo'" >&2
+        exit 2
+      fi
+      python3 "$CATAMARA_CORE_PY/contas/contas.py" init >/dev/null
+      cmd_login="${CATAMARA_AGY_LOGIN_CMD:-agy}"
+      CATAMARA_SEM_DBUS=1 "$CATAMARA_PATH/bin/catamara-isolar" --conta "$conta_alvo" --perfil agente -- $cmd_login
+      python3 "$CATAMARA_CORE_PY/contas/contas.py" confianca sincronizar >/dev/null
+      exec python3 "$CATAMARA_CORE_PY/contas/contas.py" status "$conta_alvo"
+    else
+      exec python3 "$CATAMARA_CORE_PY/contas/contas.py" "$acao" "$@"
+    fi
+    ;;
+
+  isolar)
+    exec "$CATAMARA_PATH/bin/catamara-isolar" "$@"
+    ;;
+
+  delegar|delegate)
+    exec "$CATAMARA_PATH/bin/catamara-delegar" "$@"
+    ;;
+
+  validar|validate)
+    exec "$CATAMARA_PATH/bin/catamara-validar" "$@"
+    ;;
+
+  run|iniciar)
+    exec python3 "$CATAMARA_CORE_PY/orquestracao/sessoes.py" iniciar "$@"
+    ;;
+
+  continue|continuar)
+    exec python3 "$CATAMARA_CORE_PY/orquestracao/sessoes.py" continuar "$@"
+    ;;
+
+  sessoes|sessions)
+    if [[ $# -eq 0 ]]; then
+      exec python3 "$CATAMARA_CORE_PY/orquestracao/sessoes.py" listar
+    else
+      exec python3 "$CATAMARA_CORE_PY/orquestracao/sessoes.py" "$@"
+    fi
+    ;;
+
+  tarefas|painel)
+    exec "$CATAMARA_PATH/bin/catamara-tarefas" "$@"
+    ;;
+
+  config)
+    if [[ $# -gt 0 && "$1" == "--json" ]]; then
+      python3 -c '
+import json, os
+chaves = [k for k in sorted(os.environ.keys()) if k.startswith("CATAMARA_")]
+print(json.dumps({k: os.environ[k] for k in chaves}, indent=2, ensure_ascii=False))
+'
+    else
+      exec bash "$CATAMARA_PATH/bin/catamara-config" "$@"
+    fi
+    ;;
+
+  *)
+    echo "Erro: subcomando desconhecido: '$subcomando'" >&2
+    mostrar_ajuda >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# Validador de qualidade e revisao cruzada do Catamara.
+# Executa primeiro o verificador deterministico local e, caso nao seja
+# configurado para apenas deterministico, aciona a revisao em sandbox com a conta oposta.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/catamara-config"
+
+mostrar_ajuda() {
+  cat <<'EOF'
+Uso: catamara-validar [OPCOES]
+
+Opcoes:
+  --so-deterministico    Executa apenas as checagens deterministicas locais
+  --teste COMANDO        Comando opcional de teste a ser executado
+  --conta-autor CONTA    Conta do autor (padrao: $CATAMARA_CONTA ou conta1)
+  --repo CAMINHO         Caminho do repositorio (padrao: diretorio atual)
+  --base REF             Referencia Git base para o diff (padrao: HEAD)
+  --json                 Imprime o resultado em formato JSON
+  -h, --ajuda, --help    Exibe esta mensagem de ajuda e sai
+EOF
+}
+
+so_deterministico=0
+comando_teste=""
+conta_autor="${CATAMARA_CONTA:-conta1}"
+repo_dir="$(pwd)"
+base_ref=""
+formato_json=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --so-deterministico)
+      so_deterministico=1
+      shift
+      ;;
+    --teste)
+      if [[ $# -lt 2 ]]; then
+        echo "Erro: --teste requer um comando" >&2
+        exit 2
+      fi
+      comando_teste="$2"
+      shift 2
+      ;;
+    --conta-autor)
+      if [[ $# -lt 2 ]]; then
+        echo "Erro: --conta-autor requer o nome de uma conta" >&2
+        exit 2
+      fi
+      conta_autor="$2"
+      shift 2
+      ;;
+    --repo)
+      if [[ $# -lt 2 ]]; then
+        echo "Erro: --repo requer um caminho" >&2
+        exit 2
+      fi
+      repo_dir="$2"
+      shift 2
+      ;;
+    --base)
+      if [[ $# -lt 2 ]]; then
+        echo "Erro: --base requer uma referencia" >&2
+        exit 2
+      fi
+      base_ref="$2"
+      shift 2
+      ;;
+    --json)
+      formato_json=1
+      shift
+      ;;
+    -h|--ajuda|--help)
+      mostrar_ajuda
+      exit 0
+      ;;
+    *)
+      echo "Erro: opcao desconhecida: $1" >&2
+      mostrar_ajuda >&2
+      exit 2
+      ;;
+  esac
+done
+
+repo_abs="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
+mkdir -p "$CATAMARA_ESTADO" "$CATAMARA_ESTADO/fotos"
+
+head_ref=""
+if [[ -d "$repo_abs/.git" ]]; then
+  head_ref="$(git -C "$repo_abs" rev-parse HEAD 2>/dev/null || echo "")"
+fi
+
+# 1. Execucao das checagens deterministicas
+args_det=(--json --repo "$repo_abs")
+if [[ -n "$base_ref" ]]; then
+  args_det+=(--base "$base_ref")
+fi
+if [[ -n "$comando_teste" ]]; then
+  args_det+=(--teste "$comando_teste")
+fi
+
+det_status=0
+saida_det="$(python3 "$CATAMARA_CORE_PY/orquestracao/deterministico.py" "${args_det[@]}")" || det_status=$?
+
+if [[ $det_status -ne 0 ]]; then
+  data_iso="$(catamara_data_iso)"
+  recibo="$(jq -cn \
+    --arg ts "$data_iso" \
+    --arg repo "$repo_abs" \
+    --arg head "$head_ref" \
+    --arg base "$base_ref" \
+    --argjson det_ok false \
+    --arg conta_autor "$conta_autor" \
+    --arg conta_revisor "" \
+    --arg modelo "" \
+    --arg foto "" \
+    --arg veredito "reprovado" \
+    --argjson codigo 1 \
+    '{ts: $ts, repo: $repo, head: $head, base: $base, deterministico_ok: $det_ok, conta_autor: $conta_autor, conta_revisor: null, modelo: null, foto: null, veredito: $veredito, codigo: $codigo}')"
+  catamara_anexar_linha "$CATAMARA_ESTADO/validar.jsonl" "$recibo"
+  if [[ $formato_json -eq 1 ]]; then
+    echo "$saida_det"
+  else
+    echo "Falha na verificacao deterministica." >&2
+    python3 "$CATAMARA_CORE_PY/orquestracao/deterministico.py" "${args_det[@]}" >&2 || true
+  fi
+  exit 1
+fi
+
+if [[ $so_deterministico -eq 1 ]]; then
+  data_iso="$(catamara_data_iso)"
+  recibo="$(jq -cn \
+    --arg ts "$data_iso" \
+    --arg repo "$repo_abs" \
+    --arg head "$head_ref" \
+    --arg base "$base_ref" \
+    --argjson det_ok true \
+    --arg conta_autor "$conta_autor" \
+    --arg conta_revisor "" \
+    --arg modelo "" \
+    --arg foto "" \
+    --arg veredito "aprovado" \
+    --argjson codigo 0 \
+    '{ts: $ts, repo: $repo, head: $head, base: $base, deterministico_ok: $det_ok, conta_autor: $conta_autor, conta_revisor: null, modelo: null, foto: null, veredito: $veredito, codigo: $codigo}')"
+  catamara_anexar_linha "$CATAMARA_ESTADO/validar.jsonl" "$recibo"
+  if [[ $formato_json -eq 1 ]]; then
+    echo "$saida_det"
+  else
+    echo "Verificacao deterministica concluida com sucesso."
+  fi
+  exit 0
+fi
+
+# 2. Revisao cruzada em sandbox com conta oposta (Opus 5.5 com fallback automatico para Argon)
+escolha_json="$(python3 "$CATAMARA_CORE_PY/contas/contas.py" escolher --papel revisor --modelo "$CATAMARA_REVISOR_MODELO" --evitar "$conta_autor" 2>/dev/null || echo "{}")"
+conta_revisor="$(echo "$escolha_json" | jq -r '.conta // empty' 2>/dev/null || echo "")"
+modelo_revisor_escolhido="$(echo "$escolha_json" | jq -r '.modelo // empty' 2>/dev/null || echo "$CATAMARA_REVISOR_MODELO")"
+[[ -n "$modelo_revisor_escolhido" ]] || modelo_revisor_escolhido="$CATAMARA_REVISOR_MODELO"
+
+esforco_revisor="$CATAMARA_REVISOR_ESFORCO"
+if [[ "$modelo_revisor_escolhido" == *argon* ]]; then
+  esforco_revisor="${CATAMARA_REVISOR_FALLBACK_ESFORCO:-high}"
+fi
+
+if [[ -z "$conta_revisor" ]]; then
+  echo "Erro: nenhuma conta disponivel para revisao cruzada evitando $conta_autor." >&2
+  data_iso="$(catamara_data_iso)"
+  recibo="$(jq -cn \
+    --arg ts "$data_iso" \
+    --arg repo "$repo_abs" \
+    --arg head "$head_ref" \
+    --arg base "$base_ref" \
+    --argjson det_ok true \
+    --arg conta_autor "$conta_autor" \
+    --arg conta_revisor "" \
+    --arg modelo "$modelo_revisor_escolhido" \
+    --arg foto "" \
+    --arg veredito "reprovado" \
+    --argjson codigo 1 \
+    '{ts: $ts, repo: $repo, head: $head, base: $base, deterministico_ok: $det_ok, conta_autor: $conta_autor, conta_revisor: null, modelo: $modelo, foto: null, veredito: $veredito, codigo: $codigo}')"
+  catamara_anexar_linha "$CATAMARA_ESTADO/validar.jsonl" "$recibo"
+  exit 1
+fi
+
+foto_dir="$CATAMARA_ESTADO/fotos/rev-$(date +%Y%m%d%H%M%S)-$$"
+mkdir -p "$foto_dir"
+
+# Copia arquivos do repositorio para a foto congelada usando git blindado
+if [[ -d "$repo_abs/.git" ]]; then
+  (
+    cd "$repo_abs"
+    catamara_git_seguro ls-files -z | tar -cf - --null -T - 2>/dev/null | tar -xf - -C "$foto_dir" 2>/dev/null || true
+    catamara_git_seguro ls-files --others --exclude-standard -z | tar -cf - --null -T - 2>/dev/null | tar -xf - -C "$foto_dir" 2>/dev/null || true
+    catamara_git_seguro diff "${base_ref:-HEAD}" > "$foto_dir/REVISAO.diff" 2>/dev/null || true
+  )
+else
+  cp -a "$repo_abs/." "$foto_dir/" 2>/dev/null || true
+fi
+
+chmod -R a-w "$foto_dir" 2>/dev/null || true
+
+# Executa isolamento com o revisor (se Opus falhar por cota em runtime, muda automaticamente para Argon)
+modelo_esforco="${modelo_revisor_escolhido}-${esforco_revisor}"
+prompt_revisor="Revise as alteracoes em REVISAO.diff e os arquivos na foto. Devolva na ultima linha um JSON com veredito aprovado ou reprovado."
+
+status_rev=0
+saida_rev=""
+if [[ -x "$CATAMARA_PATH/bin/catamara-isolar" ]]; then
+  saida_rev="$(CATAMARA_ISOLAR_FOTO="$foto_dir" "$CATAMARA_PATH/bin/catamara-isolar" \
+    --conta "$conta_revisor" \
+    --perfil agente \
+    -- agy --agent revisor --model "$modelo_esforco" --effort "$esforco_revisor" -p="$prompt_revisor" 2>&1)" || status_rev=$?
+
+  if [[ $status_rev -ne 0 && "$modelo_revisor_escolhido" != *argon* ]] && echo "$saida_rev" | grep -qiE "quota|limit|exhausted|rate|429"; then
+    modelo_revisor_escolhido="${CATAMARA_REVISOR_FALLBACK_MODELO:-gemini-4-argon}"
+    esforco_revisor="${CATAMARA_REVISOR_FALLBACK_ESFORCO:-high}"
+    modelo_esforco="${modelo_revisor_escolhido}-${esforco_revisor}"
+    status_rev=0
+    saida_rev="$(CATAMARA_ISOLAR_FOTO="$foto_dir" "$CATAMARA_PATH/bin/catamara-isolar" \
+      --conta "$conta_revisor" \
+      --perfil agente \
+      -- agy --agent revisor --model "$modelo_esforco" --effort "$esforco_revisor" -p="$prompt_revisor" 2>&1)" || status_rev=$?
+  fi
+else
+  echo "Aviso: catamara-isolar nao encontrado ou nao executavel." >&2
+  status_rev=1
+fi
+
+veredito="reprovado"
+codigo_saida=1
+
+if [[ $status_rev -eq 0 && -n "$saida_rev" ]]; then
+  ultima_linha="$(echo "$saida_rev" | grep -E '^\{.*"veredito"' | tail -n1 || echo "")"
+  if [[ -n "$ultima_linha" ]]; then
+    veredito_lido="$(echo "$ultima_linha" | jq -r '.veredito // empty' 2>/dev/null || echo "")"
+    if [[ "$veredito_lido" == "aprovado" ]]; then
+      veredito="aprovado"
+      codigo_saida=0
+    fi
+  fi
+fi
+
+data_iso="$(catamara_data_iso)"
+recibo="$(jq -cn \
+  --arg ts "$data_iso" \
+  --arg repo "$repo_abs" \
+  --arg head "$head_ref" \
+  --arg base "$base_ref" \
+  --argjson det_ok true \
+  --arg conta_autor "$conta_autor" \
+  --arg conta_revisor "$conta_revisor" \
+  --arg modelo "$CATAMARA_REVISOR_MODELO" \
+  --arg foto "$foto_dir" \
+  --arg veredito "$veredito" \
+  --argjson codigo "$codigo_saida" \
+  '{ts: $ts, repo: $repo, head: $head, base: $base, deterministico_ok: $det_ok, conta_autor: $conta_autor, conta_revisor: $conta_revisor, modelo: $modelo, foto: $foto, veredito: $veredito, codigo: $codigo}')"
+
+catamara_anexar_linha "$CATAMARA_ESTADO/validar.jsonl" "$recibo"
+
+if [[ $formato_json -eq 1 ]]; then
+  echo "$recibo"
+else
+  echo "Validacao finalizada. Veredito: $veredito (codigo $codigo_saida)."
+fi
+
+exit $codigo_saida

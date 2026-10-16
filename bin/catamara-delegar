@@ -1,0 +1,369 @@
+#!/usr/bin/env bash
+# Delegacao de tarefas para modelos locais (Ollama) e agentes especializados (agy)
+
+set -euo pipefail
+
+CATAMARA_PATH="${CATAMARA_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=bin/catamara-config
+source "$CATAMARA_PATH/bin/catamara-config"
+export PYTHONPATH="$CATAMARA_PATH${PYTHONPATH:+:$PYTHONPATH}"
+
+ajuda() {
+  cat << 'EOF'
+Uso: catamara-delegar [OPCOES] PAPEL TAREFA [ALVOS...]
+     catamara-delegar --aceitar ID --entrega HASH [--repo DIR]
+
+Papeis suportados:
+  leitor          Leitura estruturada ou livre com citacao de arquivo:linha
+  redator         Redacao concisa sem dados inventados
+  explorador      Mapeamento rapido de codigo e estrutura
+  pesquisador     Pesquisa externa e documentacao
+  arquiteto       Analise de modulos, dependencias e arquitetura
+  auditor         Auditoria de seguranca e conformidade
+  otimizador      Identificacao de gargalos e desempenho
+  verificador     Execucao de testes e linters
+  supervisor      Avaliacao estruturada de pareceres
+  implementador   Edicao delimitada de arquivos permitidos
+  revisor         Revisao tecnica com parecer aprovado/reprovado
+
+Opcoes:
+  -h, --ajuda, --help        Exibe esta mensagem de ajuda
+  --forcar-agy               Nao tenta modelo local Ollama; usa agy diretamente
+  --extrair CAMPO:TIPO       Extrai campo estruturado (somente leitor)
+  --agregar OP:CAMPO         Agregacao sobre registros extraidos (somente leitor)
+  --base SHA                 Commit base Git para implementador
+  --arquivos LISTA           Arquivos do contrato (implementador)
+  --permitidos LISTA         Arquivos autorizados para escrita (implementador)
+  --novos LISTA              Arquivos novos autorizados (implementador)
+  --criterio TEXTO           Criterio de aceite (implementador)
+  --aceitar ID               Aplica entrega de implementacao aprovada
+  --entrega HASH             Hash da entrega a ser aceita
+  --repo DIR                 Caminho do repositorio Git (padrao: atual)
+EOF
+}
+
+# Tratamento rapido de ajuda
+for arg in "$@"; do
+  if [[ "$arg" == "-h" || "$arg" == "--ajuda" || "$arg" == "--help" ]]; then
+    ajuda
+    exit 0
+  fi
+done
+
+PAPEIS_VALIDOS="leitor redator explorador pesquisador arquiteto auditor otimizador verificador supervisor implementador revisor"
+
+FORCAR_AGY=false
+EXTRAIR=()
+AGREGAR=()
+BASE_SHA=""
+ARQUIVOS=()
+PERMITIDOS=()
+NOVOS=()
+CRITERIO=""
+ACEITAR_ID=""
+ENTREGA_HASH=""
+REPO_DIR=""
+
+POSICIONAIS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --forcar-agy)
+      FORCAR_AGY=true
+      shift
+      ;;
+    --extrair)
+      [[ $# -ge 2 ]] || { echo "erro: --extrair exige CAMPO:TIPO" >&2; exit 2; }
+      EXTRAIR+=("$2")
+      shift 2
+      ;;
+    --agregar)
+      [[ $# -ge 2 ]] || { echo "erro: --agregar exige OP:CAMPO" >&2; exit 2; }
+      AGREGAR+=("$2")
+      shift 2
+      ;;
+    --base)
+      [[ $# -ge 2 ]] || { echo "erro: --base exige SHA" >&2; exit 2; }
+      BASE_SHA="$2"
+      shift 2
+      ;;
+    --arquivos)
+      [[ $# -ge 2 ]] || { echo "erro: --arquivos exige lista" >&2; exit 2; }
+      ARQUIVOS+=("$2")
+      shift 2
+      ;;
+    --permitidos)
+      [[ $# -ge 2 ]] || { echo "erro: --permitidos exige lista" >&2; exit 2; }
+      PERMITIDOS+=("$2")
+      shift 2
+      ;;
+    --novos)
+      [[ $# -ge 2 ]] || { echo "erro: --novos exige lista" >&2; exit 2; }
+      NOVOS+=("$2")
+      shift 2
+      ;;
+    --criterio)
+      [[ $# -ge 2 ]] || { echo "erro: --criterio exige texto" >&2; exit 2; }
+      CRITERIO="$2"
+      shift 2
+      ;;
+    --aceitar)
+      [[ $# -ge 2 ]] || { echo "erro: --aceitar exige ID" >&2; exit 2; }
+      ACEITAR_ID="$2"
+      shift 2
+      ;;
+    --entrega)
+      [[ $# -ge 2 ]] || { echo "erro: --entrega exige HASH" >&2; exit 2; }
+      ENTREGA_HASH="$2"
+      shift 2
+      ;;
+    --repo)
+      [[ $# -ge 2 ]] || { echo "erro: --repo exige diretorio" >&2; exit 2; }
+      REPO_DIR="$2"
+      shift 2
+      ;;
+    -*)
+      echo "opcao desconhecida: $1" >&2
+      exit 2
+      ;;
+    *)
+      POSICIONAIS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Rota de aceite de implementacao
+if [[ -n "$ACEITAR_ID" ]]; then
+  if [[ -z "$ENTREGA_HASH" ]]; then
+    echo "erro: --aceitar exige --entrega HASH" >&2
+    exit 2
+  fi
+  cmd=(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" aceitar --id "$ACEITAR_ID" --entrega "$ENTREGA_HASH")
+  if [[ -n "$REPO_DIR" ]]; then
+    cmd+=(--repo "$REPO_DIR")
+  fi
+  exec "${cmd[@]}"
+fi
+
+# Validacao de argumentos posicionais
+if [[ ${#POSICIONAIS[@]} -lt 1 ]]; then
+  echo "erro: papel obrigatorio (use --ajuda para lista)" >&2
+  exit 2
+fi
+
+PAPEL="${POSICIONAIS[0]}"
+TAREFA="${POSICIONAIS[1]:-}"
+ALVOS=("${POSICIONAIS[@]:2}")
+
+# Validacao do papel
+if ! [[ " $PAPEIS_VALIDOS " =~ [[:space:]]$PAPEL[[:space:]] ]]; then
+  echo "erro: papel invalido: $PAPEL" >&2
+  exit 2
+fi
+
+if [[ "$PAPEL" != "leitor" && (${#EXTRAIR[@]} -gt 0 || ${#AGREGAR[@]} -gt 0) ]]; then
+  echo "erro: --extrair e --agregar sao permitidos exclusivamente para o papel leitor" >&2
+  exit 2
+fi
+
+if [[ -z "$TAREFA" && "$PAPEL" != "implementador" ]]; then
+  echo "erro: tarefa obrigatoria para o papel $PAPEL" >&2
+  exit 2
+fi
+
+# Inicializa variaveis de registro
+MOMENTO_INICIO=$(date +%s)
+MOTOR="nenhum"
+CONTA_USADA="nenhuma"
+MODELO_USADO=""
+MOTIVO_FALLBACK=""
+IMPL_ID=""
+ENTREGA_REG=""
+CODIGO_FINAL=1
+
+registrar_delegacao() {
+  local duracao=$(( $(date +%s) - MOMENTO_INICIO ))
+  local tarefa_sha
+  tarefa_sha=$(printf '%s' "$TAREFA" | sha256sum | awk '{print $1}')
+  local arquivos_json
+  arquivos_json=$(printf '%s\n' "${ALVOS[@]:-}" "${ARQUIVOS[@]:-}" | jq -R . | jq -s -c .)
+
+  mkdir -p "$CATAMARA_ESTADO" 2>/dev/null || true
+
+  local registro
+  registro=$(jq -nc \
+    --arg ts "$(catamara_data_iso)" \
+    --arg papel "$PAPEL" \
+    --arg motor "$MOTOR" \
+    --arg conta "$CONTA_USADA" \
+    --arg modelo "$MODELO_USADO" \
+    --argjson codigo "$CODIGO_FINAL" \
+    --argjson duracao_s "$duracao" \
+    --arg tarefa_sha256 "$tarefa_sha" \
+    --argjson arquivos "$arquivos_json" \
+    --arg motivo_fallback "$MOTIVO_FALLBACK" \
+    --arg impl_id "$IMPL_ID" \
+    --arg entrega_hash "$ENTREGA_REG" \
+    '{ts: $ts, papel: $papel, motor: $motor, conta: $conta, modelo: $modelo, codigo: $codigo, duracao_s: $duracao_s, tarefa_sha256: $tarefa_sha256, arquivos: $arquivos, motivo_fallback: (if $motivo_fallback != "" then $motivo_fallback else null end), impl_id: (if $impl_id != "" then $impl_id else null end), entrega_hash: (if $entrega_hash != "" then $entrega_hash else null end)}')
+
+  catamara_anexar_linha "$CATAMARA_ESTADO/delegacoes.jsonl" "$registro" || true
+}
+
+trap 'registrar_delegacao' EXIT
+
+export CATAMARA_AGY_PAPEL="$PAPEL"
+
+# 1. Rota leitor ou redator: tenta Ollama local primeiro
+if [[ "$PAPEL" == "leitor" || "$PAPEL" == "redator" ]]; then
+  RODOU_LOCAL=false
+  if [[ "$FORCAR_AGY" != true ]]; then
+    cmd_ollama=(python3 "$CATAMARA_CORE_PY/delegacao/avaliar_ollama.py" executar --papel "$PAPEL" --tarefa "$TAREFA")
+    for ex in "${EXTRAIR[@]}"; do cmd_ollama+=(--extrair "$ex"); done
+    for ag in "${AGREGAR[@]}"; do cmd_ollama+=(--agregar "$ag"); done
+    cmd_ollama+=("${ALVOS[@]}")
+
+    set +e
+    OLLAMA_SAIDA=$("${cmd_ollama[@]}")
+    RC_OLLAMA=$?
+    set -e
+
+    if [[ $RC_OLLAMA -eq 0 ]]; then
+      printf '%s\n' "$OLLAMA_SAIDA"
+      MOTOR="ollama"
+      MODELO_USADO="$CATAMARA_LOCAL_MODELO"
+      CODIGO_FINAL=0
+      exit 0
+    else
+      MOTIVO_FALLBACK="ollama_indisponivel_ou_falhou_rc_${RC_OLLAMA}"
+    fi
+  else
+    MOTIVO_FALLBACK="forcar_agy"
+  fi
+
+  # Fallback para agy
+  MOTOR="agy"
+  MODELO_USADO="${CATAMARA_EXEC_MODELO}-${CATAMARA_EXEC_ESFORCO}"
+  CONTA_USADA=$(python3 "$CATAMARA_CORE_PY/contas/contas.py" escolher --papel executor --modelo "$CATAMARA_EXEC_MODELO" --apenas-nome 2>/dev/null || true)
+  if [[ -z "$CONTA_USADA" ]]; then
+    echo "erro: nenhuma conta disponivel para agy" >&2
+    CODIGO_FINAL=3
+    exit 3
+  fi
+
+  PROMPT_AGY="Papel: $PAPEL. Tarefa: $TAREFA."
+  if [[ ${#ALVOS[@]} -gt 0 ]]; then
+    PROMPT_AGY+=" Arquivos/alvos: ${ALVOS[*]}."
+  fi
+
+  ISOLAR_BIN="$CATAMARA_PATH/bin/catamara-isolar"
+  CODIGO_FINAL=0
+  if [[ -x "$ISOLAR_BIN" ]]; then
+    "$ISOLAR_BIN" --conta "$CONTA_USADA" --perfil agente -- \
+      agy --agent "$PAPEL" --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p="$PROMPT_AGY" || CODIGO_FINAL=$?
+  else
+    agy --agent "$PAPEL" --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p="$PROMPT_AGY" || CODIGO_FINAL=$?
+  fi
+  exit $CODIGO_FINAL
+fi
+
+# 2. Rota de implementador delimitado
+if [[ "$PAPEL" == "implementador" ]]; then
+  MOTOR="agy"
+  MODELO_USADO="${CATAMARA_EXEC_MODELO}-${CATAMARA_EXEC_ESFORCO}"
+
+  if [[ -z "$BASE_SHA" || ${#ARQUIVOS[@]} -eq 0 || ${#PERMITIDOS[@]} -eq 0 || -z "$CRITERIO" ]]; then
+    echo "erro: implementador exige --base, --arquivos, --permitidos e --criterio" >&2
+    CODIGO_FINAL=2
+    exit 2
+  fi
+
+  cmd_prep=(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" preparar
+    --base "$BASE_SHA"
+    --criterio "$CRITERIO"
+    --tarefa "$TAREFA")
+  for a in "${ARQUIVOS[@]}"; do cmd_prep+=(--arquivos "$a"); done
+  for p in "${PERMITIDOS[@]}"; do cmd_prep+=(--permitidos "$p"); done
+  for n in "${NOVOS[@]}"; do cmd_prep+=(--novos "$n"); done
+  if [[ -n "$REPO_DIR" ]]; then cmd_prep+=(--repo "$REPO_DIR"); fi
+
+  set +e
+  PREP_OUT=$("${cmd_prep[@]}")
+  RC_PREP=$?
+  set -e
+  if [[ $RC_PREP -ne 0 ]]; then
+    echo "falha ao preparar implementacao delimitada" >&2
+    CODIGO_FINAL=$RC_PREP
+    exit $RC_PREP
+  fi
+
+  IMPL_ID=$(echo "$PREP_OUT" | jq -r .id)
+  MANIFESTO_PATH=$(echo "$PREP_OUT" | jq -r .manifesto)
+
+  CONTA_USADA=$(python3 "$CATAMARA_CORE_PY/contas/contas.py" escolher --papel executor --modelo "$CATAMARA_EXEC_MODELO" --apenas-nome 2>/dev/null || true)
+  if [[ -z "$CONTA_USADA" ]]; then
+    echo "erro: nenhuma conta disponivel para implementacao" >&2
+    CODIGO_FINAL=3
+    exit 3
+  fi
+
+  PASTA_CONTA=$(catamara_pasta_conta "$CONTA_USADA")
+  MONTAGEM_ARQ=$(mktemp -t catamara-montagem-XXXXXX)
+  python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" montagem "$MANIFESTO_PATH" "$PASTA_CONTA" > "$MONTAGEM_ARQ"
+
+  PROMPT_IMPL="Implementacao delimitada id $IMPL_ID. Tarefa: $TAREFA. Criterios: $CRITERIO."
+
+  ISOLAR_BIN="$CATAMARA_PATH/bin/catamara-isolar"
+  set +e
+  if [[ -x "$ISOLAR_BIN" ]]; then
+    CATAMARA_ISOLAR_MONTAGEM="$MONTAGEM_ARQ" "$ISOLAR_BIN" --conta "$CONTA_USADA" --perfil implementacao -- \
+      agy --agent implementador --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p "$PROMPT_IMPL"
+  else
+    agy --agent implementador --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p "$PROMPT_IMPL"
+  fi
+  rm -f "$MONTAGEM_ARQ"
+  set -e
+
+  # Finaliza e extrai entrega_hash
+  set +e
+  FINAL_OUT=$(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" finalizar "$IMPL_ID")
+  RC_FINAL=$?
+  set -e
+  if [[ $RC_FINAL -ne 0 ]]; then
+    echo "falha na finalizacao da implementacao $IMPL_ID" >&2
+    CODIGO_FINAL=$RC_FINAL
+    exit $RC_FINAL
+  fi
+
+  ENTREGA_REG=$(echo "$FINAL_OUT" | jq -r .entrega_hash)
+  printf '%s\n' "$FINAL_OUT"
+  CODIGO_FINAL=0
+  exit 0
+fi
+
+# 3. Rota de agentes especialistas (explorador, auditor, arquiteto, etc.)
+MOTOR="agy"
+MODELO_USADO="${CATAMARA_EXEC_MODELO}-${CATAMARA_EXEC_ESFORCO}"
+CONTA_USADA=$(python3 "$CATAMARA_CORE_PY/contas/contas.py" escolher --papel executor --modelo "$CATAMARA_EXEC_MODELO" --apenas-nome 2>/dev/null || true)
+if [[ -z "$CONTA_USADA" ]]; then
+  echo "erro: nenhuma conta disponivel para agy" >&2
+  CODIGO_FINAL=3
+  exit 3
+fi
+
+PROMPT_AGY="Papel: $PAPEL. Tarefa: $TAREFA."
+if [[ ${#ALVOS[@]} -gt 0 ]]; then
+  PROMPT_AGY+=" Alvos: ${ALVOS[*]}."
+fi
+
+ISOLAR_BIN="$CATAMARA_PATH/bin/catamara-isolar"
+if [[ -x "$ISOLAR_BIN" ]]; then
+  "$ISOLAR_BIN" --conta "$CONTA_USADA" --perfil agente -- \
+    agy --agent "$PAPEL" --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p "$PROMPT_AGY"
+  CODIGO_FINAL=$?
+else
+  agy --agent "$PAPEL" --model "$MODELO_USADO" --effort "$CATAMARA_EXEC_ESFORCO" -p "$PROMPT_AGY"
+  CODIGO_FINAL=$?
+fi
+
+exit $CODIGO_FINAL

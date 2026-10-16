@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Carrega as preferências e funções base do catamara.
+# Uso em outros scripts:
+#   source "$(dirname "${BASH_SOURCE[0]}")/catamara-config"
+
+CATAMARA_PATH="${CATAMARA_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+CATAMARA_CONFIG="${CATAMARA_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/catamara}"
+CATAMARA_ESTADO="${CATAMARA_ESTADO:-${XDG_STATE_HOME:-$HOME/.local/state}/catamara}"
+CATAMARA_SESSOES="${CATAMARA_SESSOES:-$CATAMARA_ESTADO/sessoes}"
+CATAMARA_CONTAS_DIR="${CATAMARA_CONTAS_DIR:-$CATAMARA_ESTADO/contas}"
+CATAMARA_CORE_PY="${CATAMARA_CORE_PY:-$CATAMARA_PATH/core}"
+
+# Valores padrão dos modelos e cotas
+CATAMARA_CONTAS="${CATAMARA_CONTAS:-conta1 conta2}"
+CATAMARA_CONTA_PADRAO="${CATAMARA_CONTA_PADRAO:-conta1}"
+CATAMARA_AUTOR_MODELO="${CATAMARA_AUTOR_MODELO:-gemini-4-argon}"
+CATAMARA_AUTOR_ESFORCO="${CATAMARA_AUTOR_ESFORCO:-medium}"
+CATAMARA_EXEC_MODELO="${CATAMARA_EXEC_MODELO:-gemini-3.8-flash}"
+CATAMARA_EXEC_ESFORCO="${CATAMARA_EXEC_ESFORCO:-high}"
+CATAMARA_REVISOR_MODELO="${CATAMARA_REVISOR_MODELO:-claude-opus-5-5}"
+CATAMARA_REVISOR_ESFORCO="${CATAMARA_REVISOR_ESFORCO:-high}"
+CATAMARA_REVISOR_FALLBACK_MODELO="${CATAMARA_REVISOR_FALLBACK_MODELO:-gemini-4-argon}"
+CATAMARA_REVISOR_FALLBACK_ESFORCO="${CATAMARA_REVISOR_FALLBACK_ESFORCO:-high}"
+CATAMARA_COTA_MIN="${CATAMARA_COTA_MIN:-15}"
+CATAMARA_COTA_CACHE_TTL="${CATAMARA_COTA_CACHE_TTL:-180}"
+
+# Delegação local via Ollama (leitor e redator)
+CATAMARA_LOCAL_MODELO="${CATAMARA_LOCAL_MODELO:-qwen3:4b}"
+CATAMARA_LOCAL_CTX="${CATAMARA_LOCAL_CTX:-8192}"
+CATAMARA_LOCAL_VRAM_MIN="${CATAMARA_LOCAL_VRAM_MIN:-4000}"
+CATAMARA_LOCAL_KEEP_ALIVE="${CATAMARA_LOCAL_KEEP_ALIVE:-2m}"
+CATAMARA_LOCAL_ESPERA="${CATAMARA_LOCAL_ESPERA:-30}"
+CATAMARA_OLLAMA_URL="${CATAMARA_OLLAMA_URL:-http://localhost:11434}"
+CATAMARA_LOCAL_FATIAS_MAX="${CATAMARA_LOCAL_FATIAS_MAX:-5}"
+
+# Diretórios de trabalho e isolamento
+CATAMARA_PROJETOS="${CATAMARA_PROJETOS:-$HOME/Projetos}"
+CATAMARA_WORKTREES="${CATAMARA_WORKTREES:-$HOME/.local/share/catamara-worktrees}"
+CATAMARA_ISOLAR_ESCRITA="${CATAMARA_ISOLAR_ESCRITA:-}"
+
+if [[ -f "$CATAMARA_CONFIG/catamara.conf" ]]; then
+  while IFS='=' read -r _chave _valor; do
+    [[ "$_chave" =~ ^CATAMARA_[A-Z0-9_]+$ ]] || continue
+    _valor="${_valor/#\$HOME/$HOME}"
+    _valor="${_valor/#\~/$HOME}"
+    printf -v "$_chave" '%s' "$_valor"
+  done < <(sed -e 's/^[[:space:]]*#.*//' -e 's/[[:space:]]*$//' "$CATAMARA_CONFIG/catamara.conf")
+  unset _chave _valor
+fi
+
+export CATAMARA_PATH CATAMARA_CONFIG CATAMARA_ESTADO CATAMARA_SESSOES CATAMARA_CONTAS_DIR CATAMARA_CORE_PY \
+  CATAMARA_CONTAS CATAMARA_CONTA_PADRAO CATAMARA_AUTOR_MODELO CATAMARA_AUTOR_ESFORCO \
+  CATAMARA_EXEC_MODELO CATAMARA_EXEC_ESFORCO CATAMARA_REVISOR_MODELO CATAMARA_REVISOR_ESFORCO \
+  CATAMARA_COTA_MIN CATAMARA_COTA_CACHE_TTL CATAMARA_LOCAL_MODELO CATAMARA_LOCAL_CTX \
+  CATAMARA_LOCAL_VRAM_MIN CATAMARA_LOCAL_KEEP_ALIVE CATAMARA_LOCAL_ESPERA CATAMARA_OLLAMA_URL \
+  CATAMARA_LOCAL_FATIAS_MAX CATAMARA_PROJETOS CATAMARA_WORKTREES CATAMARA_ISOLAR_ESCRITA
+
+if [[ -n "${CATAMARA_ISOLAR_OCULTAR+x}" ]]; then export CATAMARA_ISOLAR_OCULTAR; fi
+if [[ -n "${CATAMARA_ISOLAR_OCULTAR_EXTRA+x}" ]]; then export CATAMARA_ISOLAR_OCULTAR_EXTRA; fi
+
+# Gera carimbo de data ISO 8601 consistente.
+catamara_data_iso() {
+  if date -Is >/dev/null 2>&1; then
+    date -Is
+  else
+    local d z
+    d="$(date +"%Y-%m-%dT%H:%M:%S")"
+    z="$(date +"%z")"
+    if [[ "$z" =~ ^([+-][0-9]{2})([0-9]{2})$ ]]; then
+      echo "${d}${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+    else
+      echo "${d}Z"
+    fi
+  fi
+}
+
+# Anexa linha a arquivo JSONL sob trava de leitura (flock).
+catamara_anexar_linha() {
+  [[ -e "$1" ]] || : 2>/dev/null >>"$1" || return 1
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -w 5 9 || true
+      printf '%s\n' "$2" >>"$1"
+    ) 9<"$1" 2>/dev/null
+  else
+    printf '%s\n' "$2" 2>/dev/null >>"$1"
+  fi
+}
+
+# Registra evento no journal eventos.jsonl.
+catamara_registrar_evento() {
+  local linha
+  mkdir -p "$CATAMARA_ESTADO" 2>/dev/null || true
+  linha="$(jq -cn --arg d "$(catamara_data_iso)" --arg s "${1:-}" --arg c "${2:-}" \
+    --arg p "${3:-}" --arg e "${4:-}" --arg x "${5:-}" \
+    '{data: $d, sessao: $s, conta: $c, papel: $p, estado: $e} + (($x | fromjson? | objects) // {})' 2>/dev/null)" || return 0
+  [[ -n "$linha" ]] || return 0
+  catamara_anexar_linha "$CATAMARA_ESTADO/eventos.jsonl" "$linha" || true
+  return 0
+}
+
+# git blindado contra fsmonitor e hooks plantados em diretórios graváveis.
+_catamara_git_blindagem=(core.fsmonitor=false core.hooksPath=/dev/null core.sshCommand=ssh
+  core.pager=cat safe.bareRepository=explicit)
+catamara_git_seguro() {
+  local c args=()
+  for c in "${_catamara_git_blindagem[@]}"; do args+=(-c "$c"); done
+  git "${args[@]}" "$@"
+}
+
+# Substituição atômica de arquivo preservando permissões.
+catamara_gravar_atomico() {
+  chmod --reference="$2" "$1" 2>/dev/null || true
+  mv -fT -- "$1" "$2" 2>/dev/null
+}
+
+# Executa comando sob trava de diretório.
+catamara_com_trava_dir() {
+  local dir="$1"
+  shift
+  mkdir -p "$dir" 2>/dev/null || true
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -w 5 9 || exit 1
+      "$@"
+    ) 9<"$dir"
+  else
+    "$@"
+  fi
+}
+
+# Valida o nome de uma conta (ex: conta1, conta2) e devolve o diretório antigravity-cli dela.
+catamara_pasta_conta() {
+  local conta="${1:-$CATAMARA_CONTA_PADRAO}"
+  [[ "$conta" =~ ^[A-Za-z0-9_-]+$ && "$conta" != . && "$conta" != .. ]] || return 1
+  printf '%s\n' "$CATAMARA_CONTAS_DIR/$conta/antigravity-cli"
+}
+
+# Socket próprio do tmux para sessões do catamara.
+# shellcheck disable=SC2034
+CATAMARA_TMUX=(tmux -L catamara)
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  for _v in CATAMARA_PATH CATAMARA_CONFIG CATAMARA_ESTADO CATAMARA_CONTAS_DIR \
+    CATAMARA_CONTAS CATAMARA_CONTA_PADRAO CATAMARA_AUTOR_MODELO CATAMARA_AUTOR_ESFORCO \
+    CATAMARA_EXEC_MODELO CATAMARA_EXEC_ESFORCO CATAMARA_REVISOR_MODELO CATAMARA_REVISOR_ESFORCO \
+    CATAMARA_LOCAL_MODELO CATAMARA_OLLAMA_URL CATAMARA_PROJETOS CATAMARA_WORKTREES; do
+    printf '%s=%s\n' "$_v" "${!_v}"
+  done
+fi

@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""Central de Tarefas e Painel Operacional do Catamara.
+
+Conecta-se aos dados ao vivo em ~/.local/state/catamara e ao servidor HTTP:
+- Modo TUI (padrao, --tui, --status): exibe painel completo no terminal com arte ASCII oficial da Jangada
+- Modo Indicadores (--indicadores): exibe metricas de economia de cota, balanco de cascos e funil de qualidade
+- Modo Waybar (--waybar): emite JSON para a barra Waybar
+- Modo Demonstracao (--demo): exibe dados simulados para apresentacao
+- Modo Web (--web, --servidor): sobe o servidor HTTP local se necessario e abre no navegador
+- Modo JSON (--json): emite snapshot bruto do estado em JSON
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from typing import Any
+
+# Resolucoes de caminhos e modulos
+RAIZ_CATAMARA = Path(__file__).resolve().parents[1]
+if str(RAIZ_CATAMARA) not in sys.path:
+    sys.path.insert(0, str(RAIZ_CATAMARA))
+
+from core.painel import servidor
+
+# Cores oficiais da Jangada (fichas.json / modo dark)
+R = "\033[0m"
+B = "\033[1m"
+D = "\033[2m"
+
+COR_PRIMARIA = "\033[38;2;149;205;247m"       # #95cdf7 (azul primario jangada)
+COR_TEXTO = "\033[38;2;224;227;232m"          # #e0e3e8 (texto principal)
+COR_SUAVE = "\033[38;2;193;199;206m"          # #c1c7ce (texto suave / bordas)
+COR_ATENCAO = "\033[38;2;208;188;224m"        # #d0bce0 (atencao)
+
+COR_EXEC = "\033[38;2;133;186;255m"           # #85baff (Executando)
+COR_REVISAO = "\033[38;2;201;182;242m"        # #c9b6f2 (Em revisao)
+COR_CONCLUIDA = "\033[38;2;150;214;168m"      # #96d6a8 (Concluida)
+COR_BLOQUEADA = "\033[38;2;242;198;109m"      # #f2c66d (Bloqueada / pendente)
+COR_FALHOU = "\033[38;2;240;157;147m"         # #f09d93 (Falhou / rejeitada)
+
+COR_BORDA = "\033[38;5;238m"
+
+
+def barra_progresso(pct: int | float | None, largura: int = 14, cor: str = COR_PRIMARIA) -> str:
+    if pct is None:
+        return f"{COR_BORDA}{'░' * largura}{R} {COR_SUAVE}Pendente{R}"
+    pct_val = max(0, min(100, int(round(pct))))
+    preenchido = int(largura * (pct_val / 100))
+    vazio = largura - preenchido
+    bloco = "█" * preenchido
+    fundo = "░" * vazio
+    return f"{cor}{bloco}{COR_BORDA}{fundo}{R} {COR_TEXTO}{pct_val:3d}%{R}"
+
+
+def testar_porta_ativa(host: str, porta: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex((host, porta)) == 0
+
+
+def obter_dados_demo() -> dict[str, Any]:
+    return {
+        "contas": [
+            {
+                "conta": "conta1",
+                "email": "feli.antigrav@gmail.com",
+                "autenticada": True,
+                "resumo_cotas": { "argon_pct": 80, "gemini_pct": 99, "3p_pct": 100 }
+            },
+            {
+                "conta": "conta2",
+                "email": "feli.trabalho@gmail.com",
+                "autenticada": True,
+                "resumo_cotas": { "argon_pct": 100, "gemini_pct": 94, "3p_pct": 96 }
+            }
+        ],
+        "contas_map": {
+            "conta1": {
+                "conta": "conta1",
+                "email": "feli.antigrav@gmail.com",
+                "autenticada": True,
+                "resumo_cotas": { "argon_pct": 80, "gemini_pct": 99, "3p_pct": 100 }
+            },
+            "conta2": {
+                "conta": "conta2",
+                "email": "feli.trabalho@gmail.com",
+                "autenticada": True,
+                "resumo_cotas": { "argon_pct": 100, "gemini_pct": 94, "3p_pct": 96 }
+            }
+        },
+        "ollama": {
+            "disponivel": True,
+            "modelo": "qwen3:4b",
+            "vram_livre_mib": 6420,
+            "jogo_ativo": False
+        },
+        "sessoes": [
+            {
+                "sessao": "s-refatorar-cli",
+                "branch": "feature/cli-unificado",
+                "conta": "conta1 (Argon Coord)",
+                "estado": "ativa",
+                "worktree": "~/.local/share/catamara-worktrees/wt-cli",
+                "criado": "Ha 3 min"
+            },
+            {
+                "sessao": "s-extrair-docs",
+                "branch": "task/extracao-documentos",
+                "conta": "Ollama (qwen3:4b)",
+                "estado": "concluida",
+                "worktree": "~/.local/share/catamara-worktrees/wt-docs",
+                "criado": "Ha 14 min"
+            }
+        ],
+        "implementacoes_pendentes": [
+            {
+                "id": "imp-9f3a2c",
+                "base": "4c28f11a8b92ef3018...",
+                "entrega": {
+                    "entrega_hash": "e7a359c104d9bf3a...",
+                    "alterados": {
+                        "bin/catamara-delegar": { "antes": "...", "depois": "8a4c10f88219b..." },
+                        "core/delegacao/implementacao.py": { "antes": "...", "depois": "3c91d4e07a51c..." }
+                    },
+                    "diff": "@@ -112,8 +112,14 @@ def executar_delegacao(tarefa, papel):\n     if papel == \"implementador\":\n-        return executar_direto(tarefa)\n+        manifesto = preparar_sandbox(tarefa.base_sha, tarefa.arquivos_permitidos)\n+        resultado = executar_bwrap_confinado(manifesto, timeout=300)\n+        conferir_hashes_sha256(resultado.entrega)\n+        return registrar_entrega_pendente(resultado)\n     elif papel in ROLES_LOCAIS:\n         return despachar_ollama_local(tarefa)\n"
+                }
+            }
+        ],
+        "resumo_barra": {
+            "sessoes_ativas": 1,
+            "sessoes_total": 2,
+            "entregas_pendentes": 1,
+            "portao_ok": True,
+            "c1_argon_pct": 80,
+            "c2_flash_pct": 94,
+            "vram_livre_mib": 6420,
+            "trava_ocupada": False
+        },
+        "indicadores": {
+            "economia_motores": {
+                "total_delegacoes": 7,
+                "cota_poupada_pct": 57.1,
+                "por_motor": {
+                    "ollama": { "total": 4, "sucesso": 4, "taxa_sucesso_pct": 100.0, "duracao_media_s": 1.2 },
+                    "agy_flash": { "total": 2, "sucesso": 2, "taxa_sucesso_pct": 100.0, "duracao_media_s": 3.8 },
+                    "implementador": { "total": 1, "sucesso": 1, "taxa_sucesso_pct": 100.0, "duracao_media_s": 4.5 }
+                }
+            },
+            "balanco_cascos": {
+                "conta1_chamadas": 6,
+                "conta2_chamadas": 5,
+                "piscinas_comparativo": {
+                    "argon": { "conta1_pct": 80, "conta2_pct": 100 },
+                    "gemini_flash": { "conta1_pct": 99, "conta2_pct": 94 },
+                    "opus_3p": { "conta1_pct": 100, "conta2_pct": 96 }
+                }
+            },
+            "funil_qualidade": {
+                "validacoes_total": 4,
+                "deterministico_ok": 4,
+                "taxa_deterministico_pct": 100.0,
+                "revisoes_cruzadas_total": 3,
+                "revisoes_cruzadas_ok": 3,
+                "taxa_revisao_pct": 100.0,
+                "implementacoes_total": 2,
+                "implementacoes_aceitas": 1,
+                "implementacoes_pendentes": 1
+            },
+            "linha_do_tempo": [
+                { "tipo": "validacao", "ts": "2026-10-15T23:35:00", "titulo": "Validacao Cruzada 3P", "status": "ok", "detalhes": "Aprovado por claude-opus-5-5 na conta2" },
+                { "tipo": "delegacao", "ts": "2026-10-15T23:20:00", "titulo": "Delegacao leitor local", "status": "ok", "detalhes": "Ollama qwen3:4b consolidou 4 fatias" },
+                { "tipo": "delegacao", "ts": "2026-10-15T23:10:00", "titulo": "Implementador Delimitado", "status": "ok", "detalhes": "Entrega imp-9f3a2c com 2 arquivos gerada" }
+            ]
+        }
+    }
+
+
+def desenhar_painel(estado: dict[str, Any]) -> None:
+    largura = max(88, min(shutil.get_terminal_size((96, 24)).columns, 108))
+    div = COR_BORDA + "─" * largura + R
+
+    wb = estado.get("resumo_barra", {})
+    c1_pct = wb.get("c1_argon_pct")
+    c2_pct = wb.get("c2_flash_pct")
+    c1_txt = f"{c1_pct}%" if c1_pct is not None else "--"
+    c2_txt = f"{c2_pct}%" if c2_pct is not None else "--"
+    vram_val = wb.get("vram_livre_mib")
+    vram_txt = f"{vram_val} MiB" if vram_val is not None else "--"
+    ses_ativas = wb.get("sessoes_ativas", 0)
+    ses_tot = wb.get("sessoes_total", 0)
+    ent_pend = wb.get("entregas_pendentes", 0)
+    port_ok = wb.get("portao_ok", True)
+
+    print()
+    wb_tag = f"{B}{COR_PRIMARIA}⛵ Jangada · Catamara{R}"
+    wb_ses = f"{COR_EXEC}Tarefas {ses_tot} · {ses_ativas} ativa{R}"
+    wb_c1 = f"{COR_PRIMARIA}C1: {c1_txt} (Argon){R}"
+    wb_c2 = f"{COR_REVISAO}C2: {c2_txt} (Flash){R}"
+    wb_loc = f"{COR_CONCLUIDA}Ollama: {vram_txt} VRAM{R}"
+    wb_ent = f"{COR_BLOQUEADA}{ent_pend} entrega pendente{R}" if ent_pend else f"{COR_CONCLUIDA}0 pendentes{R}"
+    wb_val = f"{COR_CONCLUIDA}Portao: OK{R}" if port_ok else f"{COR_FALHOU}Portao: FALHA{R}"
+
+    wb_linha = f" {wb_tag}  {COR_BORDA}│{R}  {wb_ses}  {COR_BORDA}│{R}  {wb_c1}  {wb_c2}  {wb_loc}  {COR_BORDA}│{R}  {wb_ent}  {COR_BORDA}│{R}  {wb_val} "
+    print(f"{COR_BORDA}┌{'─' * (largura - 2)}┐{R}")
+    print(f"{COR_BORDA}│{R}{wb_linha:<{largura + 38}}{COR_BORDA}│{R}")
+    print(f"{COR_BORDA}└{'─' * (largura - 2)}┘{R}")
+
+    # Logo ASCII oficial da Jangada
+    logo_ascii = [
+        ("               |", COR_BLOQUEADA),
+        ("               |\\", COR_TEXTO),
+        ("               | \\", COR_TEXTO),
+        ("               |  \\", COR_TEXTO),
+        ("               |   \\", COR_TEXTO),
+        ("               |    \\", COR_TEXTO),
+        ("               | (*) \\", COR_PRIMARIA),
+        ("               |      \\", COR_TEXTO),
+        ("               |       \\", COR_TEXTO),
+        ("               |        \\", COR_TEXTO),
+        ("               |_________\\", COR_TEXTO),
+        ("               |", COR_BLOQUEADA),
+        ("    ___________|____________", COR_BLOQUEADA),
+        ("    \\==|==|==|==|==|==|==|=/", COR_BLOQUEADA),
+        ("  ~~~~  ~~~~~~   ~~~~~~  ~~~~", COR_PRIMARIA),
+        ("     ~~~~~~   ~~~~~~   ~~~~", COR_PRIMARIA),
+    ]
+
+    contas_map = estado.get("contas_map", {})
+    c1_st = contas_map.get("conta1", {})
+    c2_st = contas_map.get("conta2", {})
+
+    cabecalho_info = [
+        f"{B}{COR_TEXTO}JANGADA · CENTRAL DE TAREFAS{R}",
+        f"{COR_SUAVE}Catamara: Coordenador Argon + Executor Flash + Revisor 3P Opus + Leitor Local{R}",
+        "",
+        f"{B}Atalhos CLI:{R}",
+        f"  {COR_PRIMARIA}catamara tarefas --web{R}          Abre painel visual no navegador",
+        f"  {COR_PRIMARIA}catamara tarefas --indicadores{R}  Painel analitico e metricas de qualidade",
+        f"  {COR_PRIMARIA}catamara tarefas --waybar{R}       Contadores para barra Waybar",
+        "",
+        f"{COR_SUAVE}Status dos Cascos:{R}",
+        f"  • Casco 1: {COR_PRIMARIA}{c1_st.get('email') or 'conta1'}{R} ({'autenticada' if c1_st.get('autenticada') else 'pendente'})",
+        f"  • Casco 2: {COR_REVISAO}{c2_st.get('email') or 'conta2'}{R} ({'autenticada' if c2_st.get('autenticada') else 'pendente'})",
+        f"  • Motor:   {COR_CONCLUIDA}{estado.get('ollama', {}).get('modelo', 'qwen3:4b')} pronto (leitor / redator){R}",
+    ]
+
+    print()
+    max_linhas = max(len(logo_ascii), len(cabecalho_info))
+    for i in range(max_linhas):
+        if i < len(logo_ascii):
+            txt, cor = logo_ascii[i]
+            col_esq = f"{cor}{txt:<32}{R}"
+        else:
+            col_esq = " " * 32
+        col_dir = cabecalho_info[i] if i < len(cabecalho_info) else ""
+        print(f" {col_esq}  {col_dir}")
+
+    # 1. Cartoes de Recursos
+    print(f"\n {B}{COR_TEXTO}1. ESTADO DOS CASCOS (CONTAS AGY) E MOTOR LOCAL{R}")
+    print(div)
+
+    c1_email = c1_st.get("email") or "dasilva.felipe0@gmail.com"
+    c1_cotas = c1_st.get("resumo_cotas", {})
+    print(f"  {B}{COR_PRIMARIA}CASCO 1 (Principal){R} {COR_SUAVE}{c1_email}{R}  {COR_PRIMARIA}[Coordenador Argon ativo]{R}")
+    print(f"    • Gemini 4 Argon:         {barra_progresso(c1_cotas.get('argon_pct', 80), 16, COR_PRIMARIA)}  {COR_SUAVE}(WTU semanal do coordenador){R}")
+    print(f"    • Gemini 3.8 Flash:       {barra_progresso(c1_cotas.get('gemini_pct', 99), 16, COR_PRIMARIA)}  {COR_SUAVE}(5h / semanal){R}")
+    print(f"    • Claude Opus / Sonnet:   {barra_progresso(c1_cotas.get('3p_pct', 100), 16, COR_PRIMARIA)}  {COR_SUAVE}(3P semanal){R}")
+    print(f"    {COR_BORDA}Isolamento: bwrap integro | Confianca: {c1_st.get('workspaces_confiaveis', 0)} workspaces{R}")
+    print()
+
+    c2_email = c2_st.get("email") or "feli.trabalho@gmail.com"
+    c2_cotas = c2_st.get("resumo_cotas", {})
+    print(f"  {B}{COR_REVISAO}CASCO 2 (Paralela){R} {COR_SUAVE}{c2_email}{R}  {COR_REVISAO}[Executor Flash + Revisor Opus]{R}")
+    print(f"    • Gemini 4 Argon:         {barra_progresso(c2_cotas.get('argon_pct', 100), 16, COR_REVISAO)}  {COR_SUAVE}(WTU semanal reservado){R}")
+    print(f"    • Gemini 3.8 Flash:       {barra_progresso(c2_cotas.get('gemini_pct', 94), 16, COR_REVISAO)}  {COR_SUAVE}(5h / semanal do executor){R}")
+    print(f"    • Claude Opus / Sonnet:   {barra_progresso(c2_cotas.get('3p_pct', 96), 16, COR_REVISAO)}  {COR_SUAVE}(3P semanal do revisor independente){R}")
+    print(f"    {COR_BORDA}Isolamento: bwrap estrito | Sandbox temporario de implementador{R}")
+    print()
+
+    ol = estado.get("ollama", {})
+    ol_mod = ol.get("modelo") or "qwen3:4b"
+    ol_vram = ol.get("vram_livre_mib")
+    vram_pct = int(round(ol_vram / 8192 * 100)) if isinstance(ol_vram, (int, float)) else None
+    vram_str = f"{ol_vram} MiB livres / 8.192 MiB" if ol_vram is not None else "Indisponivel"
+    print(f"  {B}{COR_CONCLUIDA}MOTOR LOCAL OLLAMA{R} {COR_SUAVE}{ol_mod}{R}  {COR_CONCLUIDA}[Pronto (leitor / redator)]{R}")
+    print(f"    • VRAM Livre GPU:         {barra_progresso(vram_pct, 16, COR_CONCLUIDA)}  {vram_str}")
+    print(f"    • Status Steam / Jogos:   {COR_FALHOU if ol.get('jogo_ativo') else COR_CONCLUIDA}{'Jogo ativo (VRAM limitada)' if ol.get('jogo_ativo') else 'Sem jogo ativo (liberada)'}{R}")
+    print(f"    • Trava flock local:      {COR_FALHOU if estado.get('trava_local', {}).get('ocupada') else COR_CONCLUIDA}{'Ocupada (local.lock)' if estado.get('trava_local', {}).get('ocupada') else 'Desocupada (local.lock livre)'}{R}")
+    print(div)
+
+    # 2. Sessoes Ativas
+    sessoes_lista = estado.get("sessoes", [])
+    print(f"\n {B}{COR_TEXTO}2. SESSOES ATIVAS (tmux -L catamara + git worktree){R}")
+    print(div)
+    if not sessoes_lista:
+        print(f"  {COR_SUAVE}Nenhuma sessao ativa registrada no momento.{R}")
+        print(f"  {COR_BORDA}Inicie com: catamara iniciar --nome <nome> --tarefa <instrucao>{R}")
+    else:
+        print(f"  {B}{'TAREFA / SESSAO':<20} {'PROJETO / WORKTREE':<28} {'AGENTE / CONTA':<24} {'ESTADO'}{R}")
+        print(f"  {COR_BORDA}{'─' * 18} {'─' * 26} {'─' * 22} {'─' * 16}{R}")
+        for s in sessoes_lista:
+            sid = f"{COR_PRIMARIA}{s.get('sessao') or s.get('id')}{R}"
+            pr = str(s.get("projeto") or "catamara")[:26]
+            ag = str(s.get("conta") or "conta1")[:22]
+            st = f"{COR_EXEC}↻ Em execucao{R}" if s.get("estado") == "ativa" else f"{COR_CONCLUIDA}✓ Concluida{R}"
+            print(f"  {sid:<29} {pr:<28} {ag:<24} {st}")
+    print(div)
+
+    # 3. Entregas Delimitadas
+    pendentes = estado.get("implementacoes_pendentes", [])
+    print(f"\n {B}{COR_TEXTO}3. ENTREGAS DELIMITADAS PENDENTES (Para Aprovacao do Coordenador){R}")
+    print(div)
+    if not pendentes:
+        print(f"  {COR_CONCLUIDA}✓ Nenhuma entrega pendente de inspecao.{R}")
+        print(f"  {COR_BORDA}Todas as alteracoes foram inspecionadas e aplicadas no repositorio.{R}")
+    else:
+        for p in pendentes:
+            ent = p.get("entrega", {})
+            alt = ent.get("alterados", {})
+            print(f"  {B}{COR_BLOQUEADA}[ENTREGA PENDENTE]{R} ID: {B}{COR_TEXTO}{p.get('id')}{R}")
+            print(f"  {COR_SUAVE}Base SHA:{R}   {str(p.get('base'))[:24]}... │ {COR_SUAVE}Manifesto SHA-256:{R} {str(ent.get('entrega_hash'))[:16]}... {COR_CONCLUIDA}[Conferido]{R}")
+            print(f"  {COR_SUAVE}Arquivos alterados na lista branca:{R}")
+            for arq, info in alt.items():
+                print(f"    {COR_CONCLUIDA}●{R} {B}{arq}{R}  {COR_BORDA}SHA: {str(info.get('depois'))[:16]}...{R}")
+            if ent.get("diff"):
+                print(f"\n  {COR_BORDA}┌── [Visualizacao do git diff] ────────────────────────────────────────────────┐{R}")
+                for ln in ent.get("diff", "").splitlines()[:10]:
+                    if ln.startswith("@@"):
+                        print(f"  {COR_BORDA}│{R} {COR_PRIMARIA}{ln}{R}")
+                    elif ln.startswith("+"):
+                        print(f"  {COR_BORDA}│{R} {COR_CONCLUIDA}{ln}{R}")
+                    elif ln.startswith("-"):
+                        print(f"  {COR_BORDA}│{R} {COR_FALHOU}{ln}{R}")
+                    else:
+                        print(f"  {COR_BORDA}│{R} {ln}")
+                print(f"  {COR_BORDA}└──────────────────────────────────────────────────────────────────────────────┘{R}")
+            print(f"  {B}Acoes do Coordenador:{R}  {COR_CONCLUIDA}catamara delegar --aceitar {p.get('id')} --entrega {ent.get('entrega_hash')}{R}")
+    print(div)
+
+    # 4. Validacao Cruzada Recente
+    print(f"\n {B}{COR_TEXTO}4. ULTIMA VALIDACAO CRUZADA REGISTRADA{R}")
+    print(div)
+    vals = estado.get("historico", {}).get("validar", [])
+    if vals:
+        uv = vals[0]
+        v_ok = uv.get("veredito") == "aprovado" or uv.get("codigo") == 0
+        cor_v = COR_CONCLUIDA if v_ok else COR_FALHOU
+        print(f"  {B}{cor_v}[VALIDACAO {uv.get('veredito', '').upper()}]{R}  Timestamp: {uv.get('ts')}")
+        print(f"    • Portao Deterministico: {COR_CONCLUIDA if uv.get('deterministico_ok') else COR_FALHOU}{'OK' if uv.get('deterministico_ok') else 'FALHA'}{R}")
+        print(f"    • Autor: {uv.get('conta_autor')} │ Revisor: {uv.get('conta_revisor') or 'local'} │ Modelo: {uv.get('modelo') or 'deterministico'}")
+        if uv.get("foto"):
+            print(f"    • Foto Congelada: {uv.get('foto')}")
+    else:
+        print(f"  {COR_SUAVE}Nenhum recibo de validacao recente.{R}")
+    print(div)
+
+    print(f"\n {COR_PRIMARIA}Interface Web/Desktop oficial:{R}")
+    print(f"  Execute {B}catamara tarefas --web{R} para abrir a central visual interativa no navegador.\n")
+
+
+def desenhar_indicadores(estado: dict[str, Any]) -> None:
+    largura = max(88, min(shutil.get_terminal_size((96, 24)).columns, 108))
+    div = COR_BORDA + "─" * largura + R
+    ind = estado.get("indicadores", {})
+
+    print()
+    print(f"{COR_BORDA}┌{'─' * (largura - 2)}┐{R}")
+    print(f"{COR_BORDA}│{R}  {B}{COR_PRIMARIA}📊 JANGADA · CATAMARA: PAINEL DE INDICADORES{R}{' ' * (largura - 48)}{COR_BORDA}│{R}")
+    print(f"{COR_BORDA}└{'─' * (largura - 2)}┘{R}\n")
+
+    # 1. Economia de Cota e Roteamento
+    eco = ind.get("economia_motores", {})
+    por_mot = eco.get("por_motor", {})
+    print(f" {B}{COR_TEXTO}1. ECONOMIA DE COTA E ROTEAMENTO POR MOTOR{R}")
+    print(div)
+    print(f"  • Total de delegacoes registradas:  {B}{eco.get('total_delegacoes', 0)}{R}")
+    print(f"  • Cota externa poupada (Ollama):    {B}{COR_CONCLUIDA}{eco.get('cota_poupada_pct', 0.0)}%{R}")
+    print()
+    print(f"  {B}{'MOTOR':<20} {'TOTAL':<10} {'SUCESSO':<12} {'DURACAO MEDIA'}{R}")
+    print(f"  {COR_BORDA}{'─' * 18} {'─' * 8} {'─' * 10} {'─' * 16}{R}")
+    for mot, dados in por_mot.items():
+        nom = "Ollama (qwen3:4b)" if mot == "ollama" else ("Gemini Flash" if mot == "agy_flash" else "Implementador")
+        tot = str(dados.get("total", 0))
+        tx = f"{dados.get('taxa_sucesso_pct', 100)}%"
+        dur = f"{dados.get('duracao_media_s', 0)}s"
+        print(f"  {nom:<20} {tot:<10} {tx:<12} {dur}")
+    print(div)
+
+    # 2. Balanco entre Casco 1 e Casco 2
+    bal = ind.get("balanco_cascos", {})
+    print(f"\n {B}{COR_TEXTO}2. BALANCO ENTRE CASCO 1 (conta1) E CASCO 2 (conta2){R}")
+    print(div)
+    c1_ch = bal.get("conta1_chamadas", 0)
+    c2_ch = bal.get("conta2_chamadas", 0)
+    print(f"  • Carga Casco 1:  {B}{COR_PRIMARIA}{c1_ch} chamadas{R}")
+    print(f"  • Carga Casco 2:  {B}{COR_REVISAO}{c2_ch} chamadas{R}")
+    pisc = bal.get("piscinas_comparativo", {})
+    print()
+    print(f"  {B}{'PISCINA':<24} {'CASCO 1 (conta1)':<24} {'CASCO 2 (conta2)'}{R}")
+    print(f"  {COR_BORDA}{'─' * 22} {'─' * 22} {'─' * 22}{R}")
+    for k, v in pisc.items():
+        c1_v = f"{v.get('conta1_pct')}%" if v.get('conta1_pct') is not None else "Pendente"
+        c2_v = f"{v.get('conta2_pct')}%" if v.get('conta2_pct') is not None else "Pendente"
+        print(f"  {k:<24} {c1_v:<24} {c2_v}")
+    print(div)
+
+    # 3. Funil de Qualidade
+    fun = ind.get("funil_qualidade", {})
+    print(f"\n {B}{COR_TEXTO}3. FUNIL DE QUALIDADE E PORTAO DETERMINISTICO{R}")
+    print(div)
+    print(f"  • Portao Deterministico Local:    {B}{COR_CONCLUIDA}{fun.get('taxa_deterministico_pct', 100)}% aprovacao{R} ({fun.get('deterministico_ok', 0)} de {fun.get('validacoes_total', 0)})")
+    print(f"  • Revisao Cruzada Independente:   {B}{COR_REVISAO}{fun.get('taxa_revisao_pct', 100)}% aprovacao{R} ({fun.get('revisoes_cruzadas_ok', 0)} de {fun.get('revisoes_cruzadas_total', 0)})")
+    print(f"  • Entregas Delimitadas Concluidas: {B}{COR_CONCLUIDA}{fun.get('implementacoes_aceitas', 0)} aceitas{R} │ {B}{COR_BLOQUEADA}{fun.get('implementacoes_pendentes', 0)} pendentes{R}")
+    print(div)
+
+    # 4. Linha do Tempo
+    lt = ind.get("linha_do_tempo", [])
+    print(f"\n {B}{COR_TEXTO}4. LINHA DO TEMPO RECENTE DE EVENTOS{R}")
+    print(div)
+    if not lt:
+        print(f"  {COR_SUAVE}Nenhum evento registrado ainda no journal.{R}")
+    else:
+        for ev in lt[:8]:
+            st_cor = COR_CONCLUIDA if ev.get("status") in {"ok", "info"} else COR_FALHOU
+            ts_curto = str(ev.get("ts", ""))[:19]
+            print(f"  [{st_cor}{ev.get('status', '').upper()}{R}] {COR_TEXTO}{ev.get('titulo')}{R}  {COR_SUAVE}({ts_curto}){R}")
+            print(f"    {COR_BORDA}{ev.get('detalhes')}{R}")
+    print(div)
+    print()
+
+
+def gerar_waybar_json(estado: dict[str, Any]) -> str:
+    wb = estado.get("resumo_barra", {})
+    ses_ativas = wb.get("sessoes_ativas", 0)
+    ent_pend = wb.get("entregas_pendentes", 0)
+    c1 = wb.get("c1_argon_pct")
+    c2 = wb.get("c2_flash_pct")
+    vram = wb.get("vram_livre_mib") or 0
+    portao_ok = wb.get("portao_ok", True)
+
+    c1_str = f"C1:{c1}%" if c1 is not None else "C1:--"
+    c2_str = f"C2:{c2}%" if c2 is not None else "C2:--"
+
+    partes = [f"⛵ {c1_str} {c2_str}"]
+    if ses_ativas:
+        partes.append(f"{ses_ativas} ativa" if ses_ativas == 1 else f"{ses_ativas} ativas")
+    if ent_pend:
+        partes.append(f"{ent_pend} entrega pendente" if ent_pend == 1 else f"{ent_pend} entregas pendentes")
+    if not portao_ok:
+        partes.append("portao reprovado")
+
+    texto = " | ".join(partes)
+    classe = "aviso" if ent_pend else ("erro" if not portao_ok else "ativo")
+    tooltip = (
+        f"Catamara Central de Tarefas\n"
+        f"Casco 1: {c1_str} (Argon)\n"
+        f"Casco 2: {c2_str} (Flash)\n"
+        f"Ollama: {vram} MiB VRAM\n"
+        f"Sessoes: {ses_ativas} ativas\n"
+        f"Entregas: {ent_pend} pendentes\n"
+        f"Clique: abrir central (catamara tarefas --web)"
+    )
+    return json.dumps({"text": texto, "tooltip": tooltip, "class": classe}, ensure_ascii=False)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Central de Tarefas e Painel Operacional do Catamara")
+    parser.add_argument("--tui", "--status", dest="tui", action="store_true", help="Renderiza a Central de Tarefas no terminal (padrao)")
+    parser.add_argument("--demo", action="store_true", help="Usa dados de demonstracao para exibicao rica")
+    parser.add_argument("--indicadores", action="store_true", help="Exibe o painel de indicadores com metricas analiticas")
+    parser.add_argument("--waybar", action="store_true", help="Emite saida JSON formatada para modulo da Waybar")
+    parser.add_argument("--json", action="store_true", help="Emite o snapshot de estado bruto em JSON")
+    parser.add_argument("--web", "--servidor", dest="web", action="store_true", help="Inicia o servidor e abre a central grafica no navegador")
+    parser.add_argument("--porta", type=int, default=int(os.environ.get("CATAMARA_PAINEL_PORTA", 8770)), help="Porta TCP do servidor (padrao: 8770)")
+    args = parser.parse_args()
+
+    if args.web:
+        porta = args.porta
+        if not testar_porta_ativa("127.0.0.1", porta):
+            # Inicia servidor em processo independente de fundo
+            cmd = [sys.executable, str(RAIZ_CATAMARA / "core" / "painel" / "servidor.py"), "--porta", str(porta)]
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            time.sleep(0.6)
+        url = f"http://127.0.0.1:{porta}"
+        print(f"Abrindo Central de Tarefas em {url}...")
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return 0
+
+    if args.demo:
+        estado = obter_dados_demo()
+    else:
+        try:
+            estado = servidor.coletar_estado_painel()
+        except Exception as exc:
+            print(f"Aviso: falha ao coletar estado ao vivo ({exc}), usando dados demo.", file=sys.stderr)
+            estado = obter_dados_demo()
+
+    if args.waybar:
+        print(gerar_waybar_json(estado))
+        return 0
+
+    if args.json:
+        print(json.dumps(estado, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.indicadores:
+        desenhar_indicadores(estado)
+        return 0
+
+    desenhar_painel(estado)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

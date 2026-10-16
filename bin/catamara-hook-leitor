@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Filtro PreToolUse do subagente leitor do Catamara.
+# Bloqueia ferramentas de escrita e restringe comandos de terminal a leitura segura.
+
+set -euo pipefail
+
+python3 - "$@" << 'PYEOF' >/dev/null 2>&1 || true
+PYEOF
+
+python3 -c '
+import json
+import os
+import re
+import shlex
+import sys
+
+COMANDOS_SEGUROS = {
+    "head", "tail", "sed", "awk", "wc", "ls", "find", "git", "jq",
+    "pdftotext", "sha256sum", "stat", "file", "cat"
+}
+
+EXPANSAO_RE = re.compile(r"`|\$[({A-Za-z0-9_@*#?!$-]")
+ATRIBUICAO_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*")
+FIND_BLOQUEADOS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls"}
+GIT_SUBCOMANDOS = {"status", "log", "diff", "show"}
+
+
+def analisar_comando(cmd_str: str) -> str | None:
+    if not cmd_str or not cmd_str.strip():
+        return "comando vazio"
+
+    if "\n" in cmd_str or "\r" in cmd_str:
+        return "quebra de linha no comando"
+
+    if "\\" in cmd_str:
+        return "barra invertida no comando"
+
+    if EXPANSAO_RE.search(cmd_str):
+        return "substituicao de comando ou expansao de variavel"
+
+    if any(op in cmd_str for op in [";", "&&", "||", "&", ">", "<"]):
+        return "operador de encadeamento ou redirecionamento proibido"
+
+    trechos = cmd_str.split("|")
+    for tr in trechos:
+        tr_limpo = tr.strip()
+        if not tr_limpo:
+            return "trecho vazio entre pipes"
+
+        try:
+            tokens = shlex.split(tr_limpo)
+        except ValueError as exc_shlex:
+            return f"erro de sintaxe no comando: {exc_shlex}"
+
+        if not tokens:
+            return "trecho sem argumentos"
+
+        primeiro = tokens[0]
+        if ATRIBUICAO_VAR_RE.match(primeiro):
+            return f"atribuicao de variavel nao permitida: {primeiro}"
+
+        nome_cmd = os.path.basename(primeiro)
+        if nome_cmd not in COMANDOS_SEGUROS:
+            return f"comando nao permitido para o leitor: {nome_cmd}"
+
+        args = tokens[1:]
+
+        if nome_cmd == "tail":
+            if any(a in {"-f", "-F"} or a.startswith(("-f", "-F")) for a in args):
+                return "tail com flag -f/-F nao permitido"
+
+        elif nome_cmd == "sed":
+            tem_n = any(a == "-n" or (a.startswith("-") and "n" in a and not a.startswith("--")) for a in args)
+            if not tem_n:
+                return "sed exige flag -n"
+            if any(a == "-i" or a.startswith(("-i", "--in-place")) for a in args):
+                return "sed com flag de edicao -i nao permitido"
+            for a in args:
+                if not a.startswith("-"):
+                    if re.search(r"(?:^|;|\s)[wWerR]\b", a):
+                        return f"comando de escrita ou execucao no script sed: {a}"
+
+        elif nome_cmd == "awk":
+            if any(a == "-f" or a.startswith(("-f", "--file")) for a in args):
+                return "awk com arquivo externo (-f) nao permitido"
+            for a in args:
+                if not a.startswith("-"):
+                    if any(termo in a for termo in ["system", "getline", ">", "|"]):
+                        return f"termo proibido no script awk: {a}"
+
+        elif nome_cmd == "find":
+            for a in args:
+                if a in FIND_BLOQUEADOS or a.startswith("-fprint"):
+                    return f"argumento proibido no find: {a}"
+
+        elif nome_cmd == "git":
+            subcmd = None
+            for a in args:
+                if a in {"-c", "--ext-diff"} or a.startswith(("-c", "--output")):
+                    return f"opcao proibida no git: {a}"
+                if not a.startswith("-") and subcmd is None:
+                    subcmd = a
+            if subcmd not in GIT_SUBCOMANDOS:
+                return f"subcomando git nao permitido para o leitor: {subcmd}"
+
+        elif nome_cmd == "pdftotext":
+            if not args or args[-1] != "-":
+                return "o ultimo argumento de pdftotext deve ser '-' (stdout)"
+
+    return None
+
+
+def main() -> int:
+    papel = os.environ.get("CATAMARA_AGY_PAPEL", "")
+    eh_agy = "--agy" in sys.argv
+
+    # Se papel for diferente de leitor, libera imediatamente
+    if papel != "leitor":
+        if eh_agy:
+            print("{\"decision\": \"allow\"}")
+        return 0
+
+    entrada = sys.stdin.read().strip()
+    if not entrada:
+        return 0
+
+    try:
+        dados = json.loads(entrada)
+    except Exception:
+        dados = {"command": entrada}
+
+    tool_name = (
+        dados.get("tool_name")
+        or dados.get("toolName")
+        or (dados.get("toolCall") or {}).get("name")
+        or ""
+    )
+
+    escrita_tools = {
+        "write_to_file", "replace_file_content", "multi_replace_file_content",
+        "edit_file", "write_file", "create_file"
+    }
+    if tool_name in escrita_tools:
+        motivo = f"ferramenta de escrita {tool_name!r} bloqueada para o leitor"
+        print(f"catamara-hook-leitor: {motivo}", file=sys.stderr)
+        if eh_agy:
+            print(json.dumps({"decision": "deny", "reason": motivo}, ensure_ascii=False))
+        return 2
+
+    leitura_tools = {
+        "view_file", "read_file", "list_dir", "grep_search", "find_by_name",
+        "read_url_content", "search_web"
+    }
+    if tool_name in leitura_tools:
+        if eh_agy:
+            print("{\"decision\": \"allow\"}")
+        return 0
+
+    cmd = None
+    if "command" in dados:
+        cmd = dados["command"]
+    elif "tool_input" in dados and isinstance(dados["tool_input"], dict):
+        cmd = dados["tool_input"].get("command") or dados["tool_input"].get("CommandLine")
+    elif "toolCall" in dados and isinstance(dados["toolCall"], dict):
+        args_obj = dados["toolCall"].get("args") or {}
+        cmd = args_obj.get("CommandLine") or args_obj.get("command")
+
+    if cmd is not None:
+        motivo = analisar_comando(str(cmd))
+        if motivo:
+            msg = f"catamara-hook-leitor: comando bloqueado para o leitor: {motivo}"
+            print(msg, file=sys.stderr)
+            if eh_agy:
+                print(json.dumps({"decision": "deny", "reason": msg}, ensure_ascii=False))
+            return 2
+
+    if eh_agy:
+        print("{\"decision\": \"allow\"}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+' "$@"

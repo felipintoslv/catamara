@@ -1,0 +1,448 @@
+#!/usr/bin/env bash
+# Isolador de execucao do Catamara usando Bubblewrap (bwrap).
+# Suporta perfis: agente, implementacao, verificacao, verificacao-rede.
+
+set -euo pipefail
+
+CATAMARA_PATH="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$CATAMARA_PATH/bin/catamara-config"
+
+uso() {
+  cat <<'EOF'
+Uso: catamara-isolar [--conta CONTA] [--perfil agente|verificacao|verificacao-rede|implementacao] [--mostrar] [--] CMD [ARGS...]
+
+Opcoes:
+  --conta CONTA       Nome da conta isolada (ex: conta1, conta2)
+  --perfil PERFIL     Perfil de montagem e permissao (padrao: agente)
+  --mostrar           Apenas exibe os argumentos que seriam passados ao bwrap
+  -h, --ajuda, --help Exibe esta mensagem de ajuda e sai
+EOF
+}
+
+opcao_conta=""
+perfil="agente"
+modo_mostrar=0
+comando_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conta)
+      [[ $# -ge 2 ]] || { echo "Erro: --conta exige um argumento." >&2; exit 2; }
+      opcao_conta="$2"
+      shift 2
+      ;;
+    --perfil)
+      [[ $# -ge 2 ]] || { echo "Erro: --perfil exige um argumento." >&2; exit 2; }
+      perfil="$2"
+      shift 2
+      ;;
+    --mostrar)
+      modo_mostrar=1
+      shift
+      ;;
+    -h|--ajuda|--help)
+      uso
+      exit 0
+      ;;
+    --)
+      shift
+      comando_args=("$@")
+      break
+      ;;
+    -*)
+      echo "Erro: opcao desconhecida '$1'." >&2
+      exit 2
+      ;;
+    *)
+      comando_args=("$@")
+      break
+      ;;
+  esac
+done
+
+case "$perfil" in
+  agente|verificacao|verificacao-rede|implementacao) ;;
+  *)
+    echo "Erro: perfil invalido '$perfil'. Use agente, verificacao, verificacao-rede ou implementacao." >&2
+    exit 2
+    ;;
+esac
+
+if [[ ${#comando_args[@]} -eq 0 && "$modo_mostrar" -eq 0 ]]; then
+  echo "Erro: nenhum comando especificado para execucao." >&2
+  exit 2
+fi
+
+conta="$opcao_conta"
+if [[ -z "$conta" ]]; then
+  if [[ -n "${CATAMARA_CONTA:-}" ]]; then
+    conta="$CATAMARA_CONTA"
+  else
+    conta="$(python3 "$CATAMARA_CORE_PY/contas/contas.py" escolher --papel executor --apenas-nome 2>/dev/null || true)"
+    conta="${conta:-$CATAMARA_CONTA_PADRAO}"
+  fi
+fi
+
+pasta_conta_alvo="$(catamara_pasta_conta "$conta" 2>/dev/null || true)"
+if [[ -z "$pasta_conta_alvo" ]]; then
+  echo "Erro: nome de conta invalido '$conta'." >&2
+  exit 2
+fi
+
+conta_permitida=0
+for c in $CATAMARA_CONTAS; do
+  if [[ "$c" == "$conta" ]]; then
+    conta_permitida=1
+    break
+  fi
+done
+if [[ "$conta_permitida" -eq 0 ]]; then
+  echo "Erro: conta '$conta' nao autorizada em CATAMARA_CONTAS ($CATAMARA_CONTAS)." >&2
+  exit 2
+fi
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  if [[ ! -d "$pasta_conta_alvo" ]]; then
+    python3 "$CATAMARA_CORE_PY/contas/contas.py" init >/dev/null 2>&1 || true
+    if [[ ! -d "$pasta_conta_alvo" ]]; then
+      echo "Erro: conta '$conta' nao inicializada em $pasta_conta_alvo." >&2
+      exit 3
+    fi
+  fi
+fi
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  if [[ "${CATAMARA_ISOLADO:-0}" == "1" ]] && grep -q '/tmp/\.catamara-isolado' /proc/self/mountinfo 2>/dev/null; then
+    if [[ "${CATAMARA_CONTA:-}" == "$conta" && "$perfil" == "agente" ]]; then
+      exec "${comando_args[@]}"
+    else
+      echo "Erro: sessao ja isolada no catamara (aninhamento nao permitido)." >&2
+      exit 6
+    fi
+  fi
+fi
+
+gravar_marcas_host() {
+  local dir_marcas="$CATAMARA_ESTADO/marcas"
+  mkdir -p "$dir_marcas" 2>/dev/null || true
+
+  local vram_livre="null"
+  local vram_total="null"
+  local vram_fonte="indisponivel"
+  local iso_agora
+  iso_agora="$(catamara_data_iso)"
+
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    local nv_out
+    nv_out="$(nvidia-smi --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>/dev/null || true)"
+    if [[ -n "$nv_out" ]]; then
+      local n1 n2
+      IFS=',' read -r n1 n2 <<< "$nv_out"
+      n1="${n1//[[:space:]]/}"
+      n2="${n2//[[:space:]]/}"
+      if [[ "$n1" =~ ^[0-9]+$ && "$n2" =~ ^[0-9]+$ ]]; then
+        vram_livre="$n1"
+        vram_total="$n2"
+        vram_fonte="nvidia-smi"
+      fi
+    fi
+  fi
+
+  if [[ "$vram_fonte" == "indisponivel" && -f /sys/class/drm/card0/device/mem_info_vram_used && -f /sys/class/drm/card0/device/mem_info_vram_total ]]; then
+    local us tot
+    us="$(cat /sys/class/drm/card0/device/mem_info_vram_used 2>/dev/null || echo 0)"
+    tot="$(cat /sys/class/drm/card0/device/mem_info_vram_total 2>/dev/null || echo 0)"
+    if [[ "$tot" -gt 0 ]]; then
+      vram_total=$(( tot / 1024 / 1024 ))
+      vram_livre=$(( (tot - us) / 1024 / 1024 ))
+      vram_fonte="amdgpu-sysfs"
+    fi
+  fi
+
+  local tmp_vram
+  tmp_vram="$(mktemp "$dir_marcas/.vram.XXXXXX")"
+  printf '{"livre_mib": %s, "total_mib": %s, "fonte": "%s", "em": "%s"}\n' \
+    "$vram_livre" "$vram_total" "$vram_fonte" "$iso_agora" > "$tmp_vram"
+  catamara_gravar_atomico "$tmp_vram" "$dir_marcas/vram.json"
+
+  local epoch_agora
+  epoch_agora="$(date +%s 2>/dev/null || echo 0)"
+  local tmp_vl
+  tmp_vl="$(mktemp "$dir_marcas/.vl.XXXXXX")"
+  printf '%s %s\n' "${vram_livre:-0}" "$epoch_agora" > "$tmp_vl"
+  catamara_gravar_atomico "$tmp_vl" "$dir_marcas/vram-livre"
+
+  local jogo_ativo="false"
+  local jogo_appid="null"
+  local jogo_pid="null"
+
+  local steam_pids
+  steam_pids="$(pgrep -f "reaper SteamLaunch|SteamLaunch AppId=" 2>/dev/null || true)"
+  if [[ -n "$steam_pids" ]]; then
+    local primeiro_pid
+    primeiro_pid="$(echo "$steam_pids" | head -n1)"
+    if [[ -n "$primeiro_pid" ]]; then
+      jogo_ativo="true"
+      jogo_pid="$primeiro_pid"
+      local cmd_linha
+      cmd_linha="$(tr '\0' ' ' < "/proc/$primeiro_pid/cmdline" 2>/dev/null || true)"
+      if [[ "$cmd_linha" =~ AppId=([0-9]+) ]]; then
+        jogo_appid="\"${BASH_REMATCH[1]}\""
+      fi
+    fi
+  fi
+
+  local tmp_jogo
+  tmp_jogo="$(mktemp "$dir_marcas/.jogo.XXXXXX")"
+  printf '{"ativo": %s, "appid": %s, "pid": %s, "em": "%s"}\n' \
+    "$jogo_ativo" "$jogo_appid" "$jogo_pid" "$iso_agora" > "$tmp_jogo"
+  catamara_gravar_atomico "$tmp_jogo" "$dir_marcas/jogo.json"
+}
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  gravar_marcas_host
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "Erro: bwrap nao encontrado no sistema." >&2
+    exit 4
+  fi
+fi
+
+rt_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+dbus_modo="nenhum"
+
+if [[ "$perfil" =~ ^(agente|implementacao)$ && "${CATAMARA_SEM_DBUS:-0}" != "1" ]]; then
+  if command -v xdg-dbus-proxy >/dev/null 2>&1 && [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    dbus_modo="proxy"
+  fi
+fi
+
+proxy_dir=""
+proxy_pid=""
+proxy_sock=""
+dbus_sinc_fd=""
+
+limpar_proxy() {
+  if [[ -n "$proxy_pid" ]]; then
+    kill "$proxy_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$proxy_dir" && -d "$proxy_dir" ]]; then
+    rm -rf "$proxy_dir" 2>/dev/null || true
+  fi
+}
+
+if [[ "$modo_mostrar" -eq 0 && "$dbus_modo" == "proxy" ]]; then
+  proxy_dir="$(mktemp -d -t catamara-dbus.XXXXXX)"
+  proxy_sock="$proxy_dir/bus"
+  proxy_fifo="$proxy_dir/sync.fifo"
+  mkfifo "$proxy_fifo"
+
+  xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$proxy_sock" \
+    --filter --talk=org.freedesktop.Notifications --fd=3 3>"$proxy_fifo" &
+  proxy_pid=$!
+
+  trap limpar_proxy EXIT INT TERM
+
+  local_sinc=""
+  if read -r -t 4 local_sinc < "$proxy_fifo"; then
+    :
+  else
+    echo "Erro: xdg-dbus-proxy nao respondeu no tempo limite." >&2
+    exit 5
+  fi
+  rm -f "$proxy_fifo" 2>/dev/null || true
+fi
+
+bwrap_args=()
+
+bwrap_args+=(--unshare-all)
+if [[ "$perfil" == "verificacao" ]]; then
+  bwrap_args+=(--unshare-net)
+else
+  bwrap_args+=(--share-net)
+fi
+bwrap_args+=(--die-with-parent)
+bwrap_args+=(--clearenv)
+bwrap_args+=(--ro-bind / /)
+bwrap_args+=(--proc /proc)
+bwrap_args+=(--dev /dev)
+bwrap_args+=(--tmpfs /tmp)
+bwrap_args+=(--ro-bind /dev/null /tmp/.catamara-isolado)
+
+caminhos_ocultar=(
+  "$HOME/.ssh"
+  "$HOME/.gnupg"
+  "$HOME/.password-store"
+  "$HOME/.aws"
+  "$HOME/.azure"
+  "$HOME/.kube"
+  "$HOME/.docker"
+  "$HOME/.netrc"
+  "$HOME/.git-credentials"
+  "$HOME/.config/gh"
+  "$HOME/.local/share/keyrings"
+  "$HOME/.local/share/kwalletd"
+  "$HOME/.cache/cliphist"
+  "$HOME/.config/google-chrome"
+  "$HOME/.config/chromium"
+  "$HOME/.mozilla"
+  "$HOME/.config/BraveSoftware"
+  "$HOME/.config/microsoft-edge"
+)
+
+if [[ -n "${CATAMARA_ISOLAR_OCULTAR:-}" ]]; then
+  for item in $CATAMARA_ISOLAR_OCULTAR; do
+    caminhos_ocultar+=("$item")
+  done
+fi
+
+if [[ -n "${CATAMARA_ISOLAR_OCULTAR_EXTRA:-}" ]]; then
+  for item in $CATAMARA_ISOLAR_OCULTAR_EXTRA; do
+    caminhos_ocultar+=("$item")
+  done
+fi
+
+for oculto in "${caminhos_ocultar[@]}"; do
+  if [[ -e "$oculto" ]]; then
+    if [[ -d "$oculto" ]]; then
+      bwrap_args+=(--tmpfs "$oculto")
+    else
+      bwrap_args+=(--ro-bind /dev/null "$oculto")
+    fi
+  fi
+done
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  mkdir -p "$CATAMARA_CONTAS_DIR" 2>/dev/null || true
+fi
+bwrap_args+=(--tmpfs "$CATAMARA_CONTAS_DIR")
+
+if [[ "$perfil" =~ ^(agente|implementacao)$ ]]; then
+  if [[ "$modo_mostrar" -eq 0 ]]; then
+    mkdir -p "$pasta_conta_alvo" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+  fi
+  bwrap_args+=(--bind "$pasta_conta_alvo" "$HOME/.gemini/antigravity-cli")
+else
+  bwrap_args+=(--tmpfs "$HOME/.gemini/antigravity-cli")
+fi
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  mkdir -p "$pasta_conta_alvo/bin" 2>/dev/null || true
+fi
+if [[ -d "$HOME/.gemini/antigravity-cli/bin" ]]; then
+  bwrap_args+=(--ro-bind "$HOME/.gemini/antigravity-cli/bin" "$HOME/.gemini/antigravity-cli/bin")
+fi
+
+if [[ "$modo_mostrar" -eq 0 ]]; then
+  mkdir -p "$CATAMARA_ESTADO/marcas" "$CATAMARA_SESSOES" "$CATAMARA_ESTADO/cotas" 2>/dev/null || true
+  touch "$CATAMARA_ESTADO/validar.jsonl" "$CATAMARA_ESTADO/eventos.jsonl" \
+        "$CATAMARA_ESTADO/delegacoes.jsonl" "$CATAMARA_ESTADO/local.lock" 2>/dev/null || true
+fi
+bwrap_args+=(--ro-bind "$CATAMARA_ESTADO/marcas" "$CATAMARA_ESTADO/marcas")
+bwrap_args+=(--ro-bind "$CATAMARA_PATH" "$CATAMARA_PATH")
+bwrap_args+=(--bind "$CATAMARA_SESSOES" "$CATAMARA_SESSOES")
+bwrap_args+=(--bind "$CATAMARA_ESTADO/cotas" "$CATAMARA_ESTADO/cotas")
+
+for arq_estado in validar.jsonl eventos.jsonl delegacoes.jsonl local.lock; do
+  caminho_arq="$CATAMARA_ESTADO/$arq_estado"
+  if [[ -e "$caminho_arq" || "$modo_mostrar" -eq 1 ]]; then
+    bwrap_args+=(--bind "$caminho_arq" "$caminho_arq")
+  fi
+done
+
+bwrap_args+=(--tmpfs "$rt_dir")
+
+if [[ "$dbus_modo" == "proxy" ]]; then
+  if [[ "$modo_mostrar" -eq 1 ]]; then
+    bwrap_args+=(--ro-bind "$rt_dir/bus" "$rt_dir/bus")
+    bwrap_args+=(--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$rt_dir/bus")
+  else
+    bwrap_args+=(--ro-bind "$proxy_sock" "$rt_dir/bus")
+    bwrap_args+=(--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$rt_dir/bus")
+  fi
+else
+  bwrap_args+=(--unsetenv DBUS_SESSION_BUS_ADDRESS)
+fi
+
+repo_raiz="$(catamara_git_seguro rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if [[ "$perfil" =~ ^(verificacao|verificacao-rede)$ ]]; then
+  bwrap_args+=(--ro-bind "$repo_raiz" "$repo_raiz")
+  bwrap_args+=(--chdir "$PWD")
+elif [[ "$perfil" == "implementacao" ]]; then
+  if [[ -n "${CATAMARA_ISOLAR_MONTAGEM:-}" && -f "${CATAMARA_ISOLAR_MONTAGEM:-}" ]]; then
+    while IFS= read -r linha; do
+      [[ -n "$linha" ]] && bwrap_args+=($linha)
+    done < "$CATAMARA_ISOLAR_MONTAGEM"
+  elif [[ -n "${CATAMARA_IMPLEMENTACAO_MANIFESTO:-}" ]]; then
+    if [[ -f "$CATAMARA_CORE_PY/delegacao/implementacao.py" ]]; then
+      mapfile -t args_impl < <(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" montagem "$CATAMARA_IMPLEMENTACAO_MANIFESTO" "$pasta_conta_alvo" 2>/dev/null || true)
+      for arg in "${args_impl[@]}"; do
+        [[ -n "$arg" ]] && bwrap_args+=($arg)
+      done
+    fi
+  else
+    bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
+    bwrap_args+=(--chdir "$PWD")
+  fi
+elif [[ "$perfil" == "agente" ]]; then
+  if [[ -n "${CATAMARA_ISOLAR_FOTO:-}" && -d "${CATAMARA_ISOLAR_FOTO:-}" ]]; then
+    bwrap_args+=(--ro-bind "$CATAMARA_ISOLAR_FOTO" "$CATAMARA_ISOLAR_FOTO")
+    bwrap_args+=(--chdir "$CATAMARA_ISOLAR_FOTO")
+  else
+    bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
+    bwrap_args+=(--chdir "$PWD")
+    if catamara_git_seguro rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git_dir="$(catamara_git_seguro rev-parse --git-dir 2>/dev/null || true)"
+      git_commondir="$(catamara_git_seguro rev-parse --git-common-dir 2>/dev/null || true)"
+      for gd in "$git_dir" "$git_commondir"; do
+        [[ -z "$gd" ]] && continue
+        gd_abs="$(cd "$gd" 2>/dev/null && pwd || true)"
+        [[ -z "$gd_abs" ]] && continue
+        for it in config hooks commondir gitdir config.worktree worktrees modules; do
+          if [[ -e "$gd_abs/$it" ]]; then
+            bwrap_args+=(--ro-bind "$gd_abs/$it" "$gd_abs/$it")
+          fi
+        done
+      done
+    fi
+  fi
+fi
+
+if [[ "$perfil" == "agente" && -d "$CATAMARA_PATH/core/agentes/agy/agents" ]]; then
+  bwrap_args+=(--ro-bind "$CATAMARA_PATH/core/agentes/agy/agents" "$HOME/.gemini/antigravity-cli/agents")
+fi
+
+bwrap_args+=(--setenv HOME "$HOME")
+bwrap_args+=(--setenv PATH "$PATH")
+bwrap_args+=(--setenv LANG "${LANG:-C.UTF-8}")
+bwrap_args+=(--setenv TERM "${TERM:-xterm-256color}")
+bwrap_args+=(--setenv XDG_RUNTIME_DIR "$rt_dir")
+bwrap_args+=(--setenv CATAMARA_ISOLADO 1)
+bwrap_args+=(--setenv CATAMARA_CONTA "$conta")
+bwrap_args+=(--setenv CATAMARA_PERFIL "$perfil")
+bwrap_args+=(--setenv CATAMARA_SESSAO "${CATAMARA_SESSAO:-}")
+if [[ -n "${CATAMARA_AGY_PAPEL:-}" ]]; then
+  bwrap_args+=(--setenv CATAMARA_AGY_PAPEL "$CATAMARA_AGY_PAPEL")
+fi
+
+if [[ "$modo_mostrar" -eq 1 ]]; then
+  printf '# catamara-isolar formato=1 conta=%s perfil=%s dbus=%s\n' "$conta" "$perfil" "$dbus_modo"
+  for arg in "${bwrap_args[@]}"; do
+    printf '%s\n' "$arg"
+  done
+  printf '%s\n' "--"
+  for c in "${comando_args[@]}"; do
+    printf '%s\n' "$c"
+  done
+  exit 0
+fi
+
+for fd_path in /proc/self/fd/*; do
+  fd="${fd_path##*/}"
+  if [[ "$fd" =~ ^[0-9]+$ ]] && (( fd > 2 )); then
+    eval "exec ${fd}<&-" 2>/dev/null || true
+  fi
+done
+
+exec bwrap "${bwrap_args[@]}" -- "${comando_args[@]}"

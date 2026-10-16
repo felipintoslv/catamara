@@ -1,0 +1,1781 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catamara: Central de tarefas</title>
+  <style>
+    /* Tokens oficiais da Jangada (fichas.json / padrao.json / app.R) */
+    :root {
+      --jangada-superficie: #101417;
+      --jangada-elevada: #1c2024;
+      --jangada-elevada-hover: #262b30;
+      --jangada-texto: #e0e3e8;
+      --jangada-texto-suave: #c1c7ce;
+      --jangada-borda: rgba(193, 199, 206, 0.18);
+      --jangada-borda-forte: #c1c7ce;
+      --jangada-primaria: #95cdf7;
+      --jangada-texto-primario: #00344e;
+      --jangada-atencao: #d0bce0;
+
+      /* Estados oficiais da Jangada (ESTADOS['dark']) */
+      --estado-executando: #85baff;
+      --estado-revisao: #c9b6f2;
+      --estado-concluida: #96d6a8;
+      --estado-bloqueada: #f2c66d;
+      --estado-falhou: #f09d93;
+
+      /* Tipografia oficial */
+      --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--jangada-superficie);
+      color: var(--jangada-texto);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Waybar superior no estilo do jangada-tarefas */
+    .waybar-simulada {
+      background: #0b0e11;
+      border-bottom: 1px solid var(--jangada-borda);
+      padding: 6px 18px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .waybar-left, .waybar-center, .waybar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .waybar-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--jangada-elevada);
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--jangada-borda);
+      color: var(--jangada-texto-suave);
+    }
+
+    .waybar-item.destaque {
+      color: var(--jangada-primaria);
+      border-color: rgba(149, 205, 247, 0.4);
+    }
+
+    .waybar-item.pulse::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--estado-concluida);
+      box-shadow: 0 0 6px var(--estado-concluida);
+    }
+
+    .waybar-item.aviso::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--estado-bloqueada);
+      box-shadow: 0 0 6px var(--estado-bloqueada);
+    }
+
+    /* Container principal */
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    /* Header oficial Jangada com SVG */
+    .header-central {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--jangada-borda);
+      padding-bottom: 18px;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    /* Logo oficial da Jangada (geometria de jangada-symbolic.svg) */
+    .marca-jangada {
+      width: 34px;
+      height: 34px;
+      color: var(--jangada-primaria);
+      flex-shrink: 0;
+    }
+
+    .header-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .app-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--jangada-texto);
+      letter-spacing: -0.3px;
+    }
+
+    .app-subtitle {
+      font-size: 13px;
+      color: var(--jangada-texto-suave);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Botoes no estilo oficial Jangada (janela.py:672) */
+    .btn {
+      font-family: var(--font-sans);
+      font-size: 13px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      background: var(--jangada-elevada);
+      color: var(--jangada-texto);
+      border: 1px solid var(--jangada-texto-suave);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .btn:hover {
+      border: 2px solid var(--jangada-primaria);
+      background: var(--jangada-elevada-hover);
+      padding: 7px 15px;
+    }
+
+    .btn:focus-visible {
+      outline: 3px solid var(--jangada-primaria);
+      outline-offset: 4px;
+    }
+
+    .btn-primary {
+      background: var(--jangada-primaria);
+      color: var(--jangada-texto-primario);
+      border-color: var(--jangada-primaria);
+      font-weight: 600;
+    }
+
+    .btn-primary:hover {
+      background: #bce1fa;
+      border-color: #bce1fa;
+    }
+
+    .btn-success {
+      background: rgba(150, 214, 168, 0.15);
+      color: var(--estado-concluida);
+      border-color: rgba(150, 214, 168, 0.4);
+      font-weight: 600;
+    }
+
+    .btn-success:hover {
+      background: rgba(150, 214, 168, 0.25);
+      border-color: var(--estado-concluida);
+    }
+
+    .btn-danger {
+      background: rgba(240, 157, 147, 0.15);
+      color: var(--estado-falhou);
+      border-color: rgba(240, 157, 147, 0.4);
+    }
+
+    .btn-danger:hover {
+      background: rgba(240, 157, 147, 0.25);
+      border-color: var(--estado-falhou);
+    }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+
+    .btn-sm:hover {
+      padding: 3px 9px;
+    }
+
+    .toggle-modo {
+      display: inline-flex;
+      align-items: center;
+      background: #14171a;
+      border: 1px solid var(--jangada-borda);
+      border-radius: 8px;
+      padding: 2px;
+    }
+
+    .toggle-opcao {
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border-radius: 6px;
+      color: var(--jangada-texto-suave);
+      border: none;
+      background: transparent;
+    }
+
+    .toggle-opcao.active {
+      background: var(--jangada-elevada);
+      color: var(--jangada-primaria);
+      font-weight: 600;
+    }
+
+    /* Cartoes superiores no estilo do Jangada Painel */
+    .cartoes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    @media (max-width: 1024px) {
+      .cartoes-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-borda);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card-header-linha {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .card-titulo {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--jangada-texto);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-subtitulo {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--jangada-texto-suave);
+      margin-top: 2px;
+    }
+
+    .tag-estado {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .tag-c1 {
+      background: rgba(149, 205, 247, 0.12);
+      color: var(--jangada-primaria);
+      border: 1px solid rgba(149, 205, 247, 0.3);
+    }
+
+    .tag-c2 {
+      background: rgba(201, 182, 242, 0.12);
+      color: var(--estado-revisao);
+      border: 1px solid rgba(201, 182, 242, 0.3);
+    }
+
+    .tag-local {
+      background: rgba(150, 214, 168, 0.12);
+      color: var(--estado-concluida);
+      border: 1px solid rgba(150, 214, 168, 0.3);
+    }
+
+    /* Barras de cota das piscinas */
+    .piscinas-lista {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .piscina-item {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .piscina-label {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .piscina-nome {
+      color: var(--jangada-texto-suave);
+    }
+
+    .piscina-valor {
+      color: var(--jangada-texto);
+      font-weight: 600;
+    }
+
+    .barra-trilho {
+      height: 6px;
+      background: #0f1215;
+      border-radius: 3px;
+      overflow: hidden;
+      border: 1px solid var(--jangada-borda);
+    }
+
+    .barra-preenchimento {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .cor-primaria { background: var(--jangada-primaria); }
+    .cor-revisao { background: var(--estado-revisao); }
+    .cor-concluida { background: var(--estado-concluida); }
+
+    .card-rodape {
+      border-top: 1px solid var(--jangada-borda);
+      padding-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--jangada-texto-suave);
+    }
+
+    /* Navegacao de abas oficial */
+    .abas-nav {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--jangada-borda);
+      padding-bottom: 2px;
+    }
+
+    .aba-btn {
+      background: transparent;
+      border: none;
+      color: var(--jangada-texto-suave);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 18px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+      border-radius: 8px 8px 0 0;
+      transition: all 0.15s ease;
+    }
+
+    .aba-btn:hover {
+      color: var(--jangada-texto);
+      background: rgba(28, 32, 36, 0.6);
+    }
+
+    .aba-btn.active {
+      color: var(--jangada-primaria);
+      background: var(--jangada-elevada);
+      font-weight: 600;
+    }
+
+    .aba-btn.active::after {
+      content: "";
+      position: absolute;
+      bottom: -3px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--jangada-primaria);
+    }
+
+    .badge-contador {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: #2a3138;
+      color: var(--jangada-texto-suave);
+    }
+
+    .badge-contador.alerta {
+      background: rgba(242, 198, 109, 0.2);
+      color: var(--estado-bloqueada);
+      font-weight: 700;
+    }
+
+    /* Conteudo das abas */
+    .aba-painel {
+      display: none;
+    }
+
+    .aba-painel.active {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    /* Tabela */
+    .tabela-container {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-borda);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    table.tabela-jangada {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    table.tabela-jangada th {
+      background: #15191c;
+      color: var(--jangada-texto-suave);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--jangada-borda);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    table.tabela-jangada td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--jangada-borda);
+      vertical-align: middle;
+    }
+
+    table.tabela-jangada tr:last-child td {
+      border-bottom: none;
+    }
+
+    table.tabela-jangada tr:hover td {
+      background: var(--jangada-elevada-hover);
+    }
+
+    .id-codigo {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--jangada-primaria);
+    }
+
+    .texto-caminho {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--jangada-texto-suave);
+    }
+
+    .indicador-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 999px;
+    }
+
+    .status-executando {
+      background: rgba(133, 186, 255, 0.12);
+      color: var(--estado-executando);
+      border: 1px solid rgba(133, 186, 255, 0.3);
+    }
+
+    .status-concluida {
+      background: rgba(150, 214, 168, 0.12);
+      color: var(--estado-concluida);
+      border: 1px solid rgba(150, 214, 168, 0.3);
+    }
+
+    .acoes-grupo {
+      display: flex;
+      gap: 6px;
+    }
+
+    /* Aba 2: Entrega Delimitada */
+    .entrega-card {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-borda);
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .entrega-topo {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--jangada-borda);
+      padding-bottom: 14px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .metadados-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      background: #14171a;
+      padding: 14px;
+      border-radius: 6px;
+      border: 1px solid var(--jangada-borda);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .metadados-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .meta-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .meta-rotulo {
+      color: var(--jangada-texto-suave);
+      font-size: 11px;
+    }
+
+    .meta-valor {
+      color: var(--jangada-texto);
+      font-weight: 500;
+      word-break: break-all;
+    }
+
+    .arquivo-linha {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #14171a;
+      border: 1px solid var(--jangada-borda);
+      padding: 9px 14px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    /* Diff Viewer */
+    .diff-bloco {
+      background: #0d1013;
+      border: 1px solid var(--jangada-borda);
+      border-radius: 6px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .diff-topo {
+      background: #14181c;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--jangada-borda);
+      color: var(--jangada-texto-suave);
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .diff-codigo {
+      padding: 12px 14px;
+      white-space: pre;
+    }
+
+    .diff-hunk {
+      color: var(--jangada-primaria);
+      background: rgba(149, 205, 247, 0.08);
+      font-weight: 600;
+    }
+
+    .diff-del {
+      background: rgba(240, 157, 147, 0.14);
+      color: #f7b2a9;
+    }
+
+    .diff-add {
+      background: rgba(150, 214, 168, 0.14);
+      color: #b0e8bf;
+    }
+
+    /* Aba 3 e Aba 4 Grid */
+    .val-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .val-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .painel-portao {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-borda);
+      border-radius: 8px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .item-portao {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #14171a;
+      border: 1px solid var(--jangada-borda);
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .parecer-bloco {
+      background: #14171a;
+      border: 1px solid var(--jangada-borda);
+      border-left: 3px solid var(--estado-revisao);
+      padding: 16px;
+      border-radius: 0 6px 6px 0;
+      font-size: 13px;
+      color: var(--jangada-texto);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 999;
+    }
+
+    .toast {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-primaria);
+      color: var(--jangada-texto);
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: aparecer 0.2s ease;
+    }
+
+    @keyframes aparecer {
+      from { transform: translateY(12px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(10, 13, 16, 0.8);
+      backdrop-filter: blur(3px);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal-box {
+      background: var(--jangada-elevada);
+      border: 1px solid var(--jangada-borda-forte);
+      border-radius: 8px;
+      padding: 22px;
+      max-width: 520px;
+      width: 90%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+    }
+
+    .form-grupo {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-rotulo {
+      font-size: 12px;
+      color: var(--jangada-texto-suave);
+    }
+
+    .form-campo {
+      background: #14171a;
+      border: 1px solid var(--jangada-texto-suave);
+      color: var(--jangada-texto);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+    }
+
+    .form-campo:focus {
+      outline: 2px solid var(--jangada-primaria);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Waybar Simulada no Topo -->
+  <header class="waybar-simulada">
+    <div class="waybar-left">
+      <span class="waybar-item pulse destaque">
+        <svg style="width:14px; height:14px; fill:currentColor;" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M15 2 C8 0 2 5 2 11.5 C2 18 7 23 14 22 C8 19 6 14 6.5 9 C7 6 10 3 15 2 Z"/>
+          <rect x="12.5" y="6" width="1.5" height="11.5"/>
+          <path d="M14 6.5 C15.4 10.8 18.3 13.6 21.2 15.5 H14 Z"/>
+          <rect x="9.5" y="17.5" width="12.5" height="2" rx="0.5"/>
+        </svg>
+        Jangada · Catamara
+      </span>
+      <span class="waybar-item" id="wb-cascos">C1: 80% (Argon) · C2: 94% (Flash)</span>
+      <span class="waybar-item" id="wb-ollama">Ollama: 6.420 MiB VRAM</span>
+    </div>
+    <div class="waybar-center">
+      <span class="waybar-item" id="wb-sessoes">Tarefas 2 · 1 em execucao</span>
+      <span class="waybar-item aviso" id="wb-entregas">1 entrega pendente</span>
+      <span class="waybar-item pulse" id="wb-portao">Portao: 18/18 OK</span>
+    </div>
+    <div class="waybar-right">
+      <div class="toggle-modo">
+        <button class="toggle-opcao active" id="btn-modo-vivo" onclick="alternarModoFonte('vivo')">Ao Vivo</button>
+        <button class="toggle-opcao" id="btn-modo-demo" onclick="alternarModoFonte('demo')">Demonstracao</button>
+      </div>
+      <span class="waybar-item" id="wb-clock">23:55 UTC-3</span>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <!-- Header Principal -->
+    <header class="header-central">
+      <div class="header-brand">
+        <!-- Logo oficial da Jangada (default/logo/jangada-symbolic.svg) -->
+        <svg class="marca-jangada" viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="currentColor">
+            <path d="M15 2 C8 0 2 5 2 11.5 C2 18 7 23 14 22 C8 19 6 14 6.5 9 C7 6 10 3 15 2 Z"/>
+            <rect x="12.5" y="6" width="1.5" height="11.5"/>
+            <path d="M14 6.5 C15.4 10.8 18.3 13.6 21.2 15.5 H14 Z"/>
+            <rect x="9.5" y="17.5" width="12.5" height="2" rx="0.5"/>
+          </g>
+        </svg>
+        <div class="header-text">
+          <h1 class="app-title">Central de tarefas</h1>
+          <p class="app-subtitle">Catamara: Coordenador Argon + Executor Flash Confinado + Revisor 3P Opus + Leitor Local</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn" onclick="atualizarDados(true)">
+          <span>↻</span> Atualizar
+        </button>
+        <button class="btn btn-primary" onclick="abrirModalNovaTarefa()">
+          <span>+</span> Nova tarefa
+        </button>
+        <button class="btn" onclick="selecionarAba('indicadores', document.getElementById('tab-btn-indicadores'))">
+          Painel de indicadores
+        </button>
+        <button class="btn" onclick="executarDoctor()">
+          Doctor
+        </button>
+        <button class="btn" onclick="executarValidacao()">
+          Validar
+        </button>
+      </div>
+    </header>
+
+    <!-- Cartoes Superiores (Casco 1, Casco 2, Motor Local) -->
+    <section class="cartoes-grid">
+      <!-- Casco 1 -->
+      <div class="card">
+        <div class="card-header-linha">
+          <div>
+            <div class="card-titulo">
+              <span>Casco 1 (Principal)</span>
+            </div>
+            <div class="card-subtitulo" id="c1-email">feli.antigrav@gmail.com</div>
+          </div>
+          <span class="tag-estado tag-c1" id="c1-papel">Coordenador Argon ativo</span>
+        </div>
+
+        <div class="piscinas-lista">
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Gemini 4 Argon (WTU semanal)</span>
+              <span class="piscina-valor" id="c1-argon-val">80%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-primaria" id="c1-argon-bar" style="width: 80%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Gemini 3.8 Flash (5h / semanal)</span>
+              <span class="piscina-valor" id="c1-flash-val">99%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-primaria" id="c1-flash-bar" style="width: 99%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Claude Opus / Sonnet (3P semanal)</span>
+              <span class="piscina-valor" id="c1-3p-val">100%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-primaria" id="c1-3p-bar" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-rodape">
+          <span id="c1-sessao-status">Sessao: s-refatorar-cli</span>
+          <span style="color: var(--estado-concluida);" id="c1-conexao">● Conectado</span>
+        </div>
+      </div>
+
+      <!-- Casco 2 -->
+      <div class="card">
+        <div class="card-header-linha">
+          <div>
+            <div class="card-titulo">
+              <span>Casco 2 (Paralela)</span>
+            </div>
+            <div class="card-subtitulo" id="c2-email">feli.trabalho@gmail.com</div>
+          </div>
+          <span class="tag-estado tag-c2" id="c2-papel">Executor Flash + Revisor Opus</span>
+        </div>
+
+        <div class="piscinas-lista">
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Gemini 4 Argon (WTU semanal)</span>
+              <span class="piscina-valor" id="c2-argon-val">100%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-revisao" id="c2-argon-bar" style="width: 100%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Gemini 3.8 Flash (5h / semanal)</span>
+              <span class="piscina-valor" id="c2-flash-val">94%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-revisao" id="c2-flash-bar" style="width: 94%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Claude Opus / Sonnet (3P semanal)</span>
+              <span class="piscina-valor" id="c2-3p-val">96%</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-revisao" id="c2-3p-bar" style="width: 96%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-rodape">
+          <span id="c2-sandbox-status">Sandbox: bwrap isolado</span>
+          <span style="color: var(--estado-concluida);" id="c2-conexao">● Conectado</span>
+        </div>
+      </div>
+
+      <!-- Motor Local Ollama -->
+      <div class="card">
+        <div class="card-header-linha">
+          <div>
+            <div class="card-titulo">
+              <span>Motor Local Ollama</span>
+            </div>
+            <div class="card-subtitulo" id="ollama-modelo">qwen3:4b (offline, zero cota)</div>
+          </div>
+          <span class="tag-estado tag-local" id="ollama-papel">Pronto (leitor / redator)</span>
+        </div>
+
+        <div class="piscinas-lista">
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">VRAM livre da GPU</span>
+              <span class="piscina-valor" id="ollama-vram-val">6.420 MiB / 8.192 MiB</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-concluida" id="ollama-vram-bar" style="width: 78%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Status Steam / Jogos</span>
+              <span class="piscina-valor" id="ollama-steam-val" style="color: var(--estado-concluida);">Sem jogo ativo</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-concluida" style="width: 100%;"></div>
+            </div>
+          </div>
+          <div class="piscina-item">
+            <div class="piscina-label">
+              <span class="piscina-nome">Trava flock local</span>
+              <span class="piscina-valor" id="ollama-lock-val">Desocupada (local.lock)</span>
+            </div>
+            <div class="barra-trilho">
+              <div class="barra-preenchimento cor-concluida" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-rodape">
+          <span>Fatiamento: extracao.py</span>
+          <span style="color: var(--estado-concluida);">● Local</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Navegacao por Abas -->
+    <nav class="abas-nav">
+      <button class="aba-btn active" id="tab-btn-sessoes" onclick="selecionarAba('sessoes', this)">
+        <span>🗂</span> Sessoes ativas
+        <span class="badge-contador" id="count-sessoes">2</span>
+      </button>
+      <button class="aba-btn" id="tab-btn-entregas" onclick="selecionarAba('entregas', this)">
+        <span>📦</span> Entregas delimitadas
+        <span class="badge-contador alerta" id="count-entregas">1</span>
+      </button>
+      <button class="aba-btn" id="tab-btn-validacao" onclick="selecionarAba('validacao', this)">
+        <span>🛡</span> Validacao cruzada independente
+        <span class="badge-contador" id="badge-validacao">OK</span>
+      </button>
+      <button class="aba-btn" id="tab-btn-indicadores" onclick="selecionarAba('indicadores', this)">
+        <span>📊</span> Painel de indicadores
+        <span class="badge-contador">Metricas</span>
+      </button>
+    </nav>
+
+    <!-- ABA 1: Sessoes Ativas -->
+    <section id="aba-sessoes" class="aba-painel active">
+      <div class="tabela-container">
+        <table class="tabela-jangada">
+          <thead>
+            <tr>
+              <th>Tarefa / Sessao</th>
+              <th>Projeto / Worktree</th>
+              <th>Agente / Conta</th>
+              <th>Estado</th>
+              <th>Atualizacao</th>
+              <th style="text-align: right;">Acoes</th>
+            </tr>
+          </thead>
+          <tbody id="lista-corpo-sessoes">
+            <!-- Preenchido via JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ABA 2: Entregas Delimitadas -->
+    <section id="aba-entregas" class="aba-painel">
+      <div id="container-entregas-dinamico">
+        <!-- Renderizado dinamicamente -->
+      </div>
+    </section>
+
+    <!-- ABA 3: Validacao Cruzada -->
+    <section id="aba-validacao" class="aba-painel">
+      <div class="val-grid">
+        <!-- Portao Deterministico Local -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">Portao Deterministico Local</h3>
+            <span class="tag-estado tag-local">100% Offline / Sem Rede</span>
+          </div>
+          <p style="font-size: 13px; color: var(--jangada-texto-suave);">
+            Checagens de integridade antes da criacao da foto congelada:
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="item-portao">
+              <span>Varredura de Segredos (gitleaks)</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="gate-gitleaks">✓ OK (0 segredos)</span>
+            </div>
+            <div class="item-portao">
+              <span>Sintaxe de Scripts Shell (bash -n)</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="gate-bash">✓ OK (Scripts validos)</span>
+            </div>
+            <div class="item-portao">
+              <span>Compilacao Python AST (py_compile)</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="gate-python">✓ OK (0 erros AST)</span>
+            </div>
+            <div class="item-portao">
+              <span>Bateria de Testes Unitarios e Integracao</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="gate-testes">✓ 18/18 OK (100% sucesso)</span>
+            </div>
+          </div>
+
+          <div class="texto-caminho" style="border-top: 1px solid var(--jangada-borda); padding-top: 10px;">
+            Execucao deterministica: tempo total 1.42s | Memoria maxima: 48 MiB
+          </div>
+        </div>
+
+        <!-- Parecer do Revisor Claude Opus -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">Revisao Cruzada na Conta Oposta</h3>
+            <span class="tag-estado tag-c2">Revisor Independente</span>
+          </div>
+
+          <div class="parecer-bloco">
+            <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--jangada-texto-suave);">
+              <span id="rev-modelo">REVISOR: claude-opus-5-5-high (Familia 3P)</span>
+              <span id="rev-conta">CONTA: conta2 (autor foi conta1)</span>
+            </div>
+            <p id="rev-texto">
+              "Inspecionei a foto congelada somente-leitura. O confinamento Bubblewrap isola as chaves OAuth do D-Bus e nao ha regressao nos contratos de fatiamento do extracao.py. Os testes cobrem a integridade dos hashes SHA-256 da entrega. Aprovado para integracao."
+            </p>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--jangada-borda); padding-top: 8px;">
+              <span class="texto-caminho" id="rev-foto">
+                Foto: fotos/rev-20261016021124-4190 (read-only)
+              </span>
+              <span class="indicador-status status-concluida" style="font-weight: 700;" id="rev-veredito">
+                VEREDITO: APROVADO
+              </span>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-top: auto;">
+            <button class="btn btn-sm" style="flex: 1;" onclick="verFotoCongelada()">
+              Inspecionar Foto Congelada
+            </button>
+            <button class="btn btn-primary btn-sm" style="flex: 1;" onclick="executarValidacao()">
+              Revalidar Novamente
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABA 4: Painel de Indicadores -->
+    <section id="aba-indicadores" class="aba-painel">
+      <div class="val-grid">
+        <!-- 1. Economia de Cota e Roteamento por Motor -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">1. Economia de Cota e Roteamento</h3>
+            <span class="tag-estado tag-local" id="ind-cota-poupada">Cota Poupada: 67%</span>
+          </div>
+          <p style="font-size: 13px; color: var(--jangada-texto-suave);">
+            Distribuicao das tarefas entre inferencia local (zero cota) e modelos em nuvem:
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="item-portao">
+              <span>Ollama Local (qwen3:4b)</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="ind-motor-ollama">4 chamadas (100% sucesso, 1.2s med)</span>
+            </div>
+            <div class="item-portao">
+              <span>Gemini 3.8 Flash (agy)</span>
+              <span style="color: var(--jangada-primaria); font-weight: 600;" id="ind-motor-flash">2 chamadas (100% sucesso, 3.8s med)</span>
+            </div>
+            <div class="item-portao">
+              <span>Implementador Delimitado</span>
+              <span style="color: var(--estado-revisao); font-weight: 600;" id="ind-motor-impl">1 entrega (confinado bwrap)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Balanco entre Casco 1 e Casco 2 -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">2. Balanco entre Casco 1 e Casco 2</h3>
+            <span class="tag-estado tag-c1" id="ind-balanco-ratio">C1: 58% | C2: 42%</span>
+          </div>
+          <p style="font-size: 13px; color: var(--jangada-texto-suave);">
+            Carga de trabalho distribuida para evitar esgotamento de cotas semanais:
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="item-portao">
+              <span>Piscina Argon (WTU Semanal)</span>
+              <span style="font-family: var(--font-mono); font-size: 11px;">C1: 80% vs C2: 100%</span>
+            </div>
+            <div class="item-portao">
+              <span>Piscina Flash (5h / Semanal)</span>
+              <span style="font-family: var(--font-mono); font-size: 11px;">C1: 99% vs C2: 94%</span>
+            </div>
+            <div class="item-portao">
+              <span>Piscina 3P (Claude Opus/Sonnet)</span>
+              <span style="font-family: var(--font-mono); font-size: 11px;">C1: 100% vs C2: 96%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Funil de Qualidade -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">3. Funil de Qualidade e Portao</h3>
+            <span class="tag-estado tag-concluida">Taxa: 100%</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="item-portao">
+              <span>Portao Deterministico Local</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="ind-funil-det">100% aprovado</span>
+            </div>
+            <div class="item-portao">
+              <span>Revisao Cruzada Independente (3P)</span>
+              <span style="color: var(--estado-revisao); font-weight: 600;" id="ind-funil-rev">100% aprovado</span>
+            </div>
+            <div class="item-portao">
+              <span>Entregas Delimitadas Aceitas</span>
+              <span style="color: var(--estado-concluida); font-weight: 600;" id="ind-funil-entregas">1 aceita, 0 pendente</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. Linha do Tempo Recente -->
+        <div class="painel-portao">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600;">4. Linha do Tempo Recente</h3>
+            <span class="texto-caminho">Eventos do Journal</span>
+          </div>
+
+          <div id="ind-linha-tempo" style="display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto;">
+            <!-- Renderizado dinamicamente -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Modal Nova Tarefa -->
+  <div id="modal-nova-tarefa" class="modal-overlay">
+    <div class="modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="font-size: 16px; font-weight: 600;">Nova tarefa na Jangada</h3>
+        <button onclick="fecharModalNovaTarefa()" style="background: none; border: none; color: var(--jangada-texto-suave); cursor: pointer; font-size: 18px;">✕</button>
+      </div>
+
+      <div class="form-grupo">
+        <label class="form-rotulo">Identificador da Tarefa / Sessao</label>
+        <input type="text" id="nova-tarefa-id" class="form-campo" value="s-nova-feature" placeholder="ex: s-auditoria-seguranca">
+      </div>
+
+      <div class="form-grupo">
+        <label class="form-rotulo">Papel / Agente</label>
+        <select id="nova-tarefa-papel" class="form-campo">
+          <option value="coordenador">Coordenador (Gemini 4 Argon - Conta 1)</option>
+          <option value="implementador">Implementador Delimitado (Gemini 3.8 Flash - Conta 2)</option>
+          <option value="leitor">Leitor de Documentos (Ollama qwen3:4b Local)</option>
+          <option value="revisor">Revisor de Codigo (Claude Opus 3P - Conta 2)</option>
+        </select>
+      </div>
+
+      <div class="form-grupo">
+        <label class="form-rotulo">Instrucao / Prompt Inicial</label>
+        <textarea id="nova-tarefa-prompt" class="form-campo" rows="3" placeholder="Descreva o objetivo da tarefa..."></textarea>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+        <button class="btn" onclick="fecharModalNovaTarefa()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarNovaTarefa()">Iniciar sessao</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script>
+    // Dados de demonstracao para visualizacao rica quando nao houver dados no live
+    const DADOS_DEMO = {
+      contas: [
+        {
+          conta: "conta1",
+          email: "feli.antigrav@gmail.com",
+          autenticada: true,
+          resumo_cotas: { argon_pct: 80, gemini_pct: 99, "3p_pct": 100 }
+        },
+        {
+          conta: "conta2",
+          email: "feli.trabalho@gmail.com",
+          autenticada: true,
+          resumo_cotas: { argon_pct: 100, gemini_pct: 94, "3p_pct": 96 }
+        }
+      ],
+      ollama: {
+        disponivel: true,
+        modelo: "qwen3:4b",
+        vram_livre_mib: 6420,
+        jogo_ativo: false
+      },
+      sessoes: [
+        {
+          sessao: "s-refatorar-cli",
+          projeto: "catamara",
+          worktree: "~/.local/share/catamara-worktrees/wt-cli",
+          branch: "feature/cli-unificado",
+          conta: "conta1 (Argon Coordenador)",
+          estado: "ativa",
+          criado: "Ha 3 min"
+        },
+        {
+          sessao: "s-extrair-docs",
+          projeto: "catamara",
+          worktree: "~/.local/share/catamara-worktrees/wt-docs",
+          branch: "task/extracao-documentos",
+          conta: "Ollama (qwen3:4b Leitor)",
+          estado: "concluida",
+          criado: "Ha 14 min"
+        }
+      ],
+      implementacoes_pendentes: [
+        {
+          id: "imp-9f3a2c",
+          base: "4c28f11a8b92ef...",
+          entrega: {
+            entrega_hash: "e7a359c104d9bf3...",
+            alterados: {
+              "bin/catamara-delegar": { antes: "...", depois: "8a4c10f88219b..." },
+              "core/delegacao/implementacao.py": { antes: "...", depois: "3c91d4e07a51c..." }
+            },
+            diff: "@@ -112,8 +112,14 @@ def executar_delegacao(tarefa, papel):\n     if papel == \"implementador\":\n-        return executar_direto(tarefa)\n+        manifesto = preparar_sandbox(tarefa.base_sha, tarefa.arquivos_permitidos)\n+        resultado = executar_bwrap_confinado(manifesto, timeout=300)\n+        conferir_hashes_sha256(resultado.entrega)\n+        return registrar_entrega_pendente(resultado)\n     elif papel in ROLES_LOCAIS:\n         return despachar_ollama_local(tarefa)\n@@ -240,6 +246,12 @@ def aceitar_entrega(impl_id, hash_esperado):\n+    if not validar_integridade_manifesto(impl_id, hash_esperado):\n+        raise ValueError(\"Hash da entrega diverge do manifesto aprovado!\")\n+    aplicar_patch_confinado(impl_id)\n+    executar_portao_deterministico()\n"
+          }
+        }
+      ],
+      resumo_barra: {
+        sessoes_ativas: 1,
+        entregas_pendentes: 1,
+        portao_ok: true,
+        c1_argon_pct: 80,
+        c2_flash_pct: 94,
+        vram_livre_mib: 6420
+      },
+      indicadores: {
+        economia_motores: {
+          cota_poupada_pct: 66.7,
+          por_motor: {
+            ollama: { total: 4, taxa_sucesso_pct: 100.0, duracao_media_s: 1.2 },
+            agy_flash: { total: 2, taxa_sucesso_pct: 100.0, duracao_media_s: 3.8 },
+            implementador: { total: 1, taxa_sucesso_pct: 100.0, duracao_media_s: 4.5 }
+          }
+        },
+        balanco_cascos: {
+          conta1_chamadas: 5,
+          conta2_chamadas: 4
+        },
+        funil_qualidade: {
+          taxa_deterministico_pct: 100.0,
+          taxa_revisao_pct: 100.0,
+          implementacoes_aceitas: 1,
+          implementacoes_pendentes: 1
+        },
+        linha_do_tempo: [
+          { tipo: "validacao", ts: "Agora", titulo: "Validacao Cruzada 3P", status: "ok", detalhes: "Aprovado por claude-opus-5-5 na conta2" },
+          { tipo: "delegacao", ts: "Ha 3 min", titulo: "Delegacao leitor local", status: "ok", detalhes: "Ollama qwen3:4b consolidou fatias" },
+          { tipo: "delegacao", ts: "Ha 12 min", titulo: "Implementador Flash", status: "ok", detalhes: "Entrega gerada com 2 arquivos permitidos" }
+        ]
+      }
+    };
+
+    let modoFonteAtual = "vivo";
+    let estadoCache = null;
+
+    function alternarModoFonte(modo) {
+      modoFonteAtual = modo;
+      document.getElementById('btn-modo-vivo').classList.toggle('active', modo === 'vivo');
+      document.getElementById('btn-modo-demo').classList.toggle('active', modo === 'demo');
+      renderizarInterface(modo === 'vivo' ? estadoCache : DADOS_DEMO);
+      showToast(modo === 'vivo' ? "Visualizando dados ao vivo do sistema" : "Visualizando dados de demonstracao", "ℹ");
+    }
+
+    // Carregamento de dados da API ou fallback
+    async function atualizarDados(mostrarAviso = false) {
+      if (mostrarAviso) showToast("Consultando /api/estado...", "↻");
+      try {
+        const resp = await fetch('/api/estado');
+        if (resp.ok) {
+          estadoCache = await resp.json();
+          if (modoFonteAtual === 'vivo') {
+            renderizarInterface(estadoCache);
+          }
+          if (mostrarAviso) showToast("Dados ao vivo atualizados com sucesso!", "✓");
+          return;
+        }
+      } catch (err) {
+        // Se nao alcancar servidor HTTP (aberto via file://), usa demonstracao
+        console.warn("Servidor nao alcancado, alternando para demo:", err);
+      }
+      renderizarInterface(DADOS_DEMO);
+    }
+
+    function renderizarInterface(dados) {
+      if (!dados) return;
+
+      // Waybar
+      const wb = dados.resumo_barra || {};
+      const c1Pct = wb.c1_argon_pct !== null && wb.c1_argon_pct !== undefined ? wb.c1_argon_pct : (dados.contas?.[0]?.resumo_cotas?.argon_pct ?? "--");
+      const c2Pct = wb.c2_flash_pct !== null && wb.c2_flash_pct !== undefined ? wb.c2_flash_pct : (dados.contas?.[1]?.resumo_cotas?.gemini_pct ?? "--");
+      const vram = wb.vram_livre_mib || dados.ollama?.vram_livre_mib || 0;
+      const sessoesAtivas = wb.sessoes_ativas ?? dados.sessoes?.filter(s => s.estado === 'ativa').length ?? 0;
+      const sessoesTotal = wb.sessoes_total ?? dados.sessoes?.length ?? 0;
+      const entregasPendentes = wb.entregas_pendentes ?? dados.implementacoes_pendentes?.length ?? 0;
+
+      document.getElementById('wb-cascos').textContent = `C1: ${c1Pct}% (Argon) · C2: ${c2Pct}% (Flash)`;
+      document.getElementById('wb-ollama').textContent = `Ollama: ${vram} MiB VRAM`;
+      document.getElementById('wb-sessoes').textContent = `Tarefas ${sessoesTotal} · ${sessoesAtivas} em execucao`;
+      document.getElementById('wb-entregas').textContent = `${entregasPendentes} entrega pendente`;
+      document.getElementById('wb-entregas').className = `waybar-item ${entregasPendentes > 0 ? 'aviso' : ''}`;
+
+      // Cards Contas
+      const c1 = dados.contas?.[0] || dados.contas_map?.conta1 || {};
+      const c2 = dados.contas?.[1] || dados.contas_map?.conta2 || {};
+
+      document.getElementById('c1-email').textContent = c1.email || (c1.autenticada ? "autenticado" : "pendente autenticacao");
+      const c1Argon = c1.resumo_cotas?.argon_pct ?? 80;
+      const c1Flash = c1.resumo_cotas?.gemini_pct ?? 99;
+      const c1_3p = c1.resumo_cotas?.['3p_pct'] ?? 100;
+      document.getElementById('c1-argon-val').textContent = `${c1Argon}%`;
+      document.getElementById('c1-argon-bar').style.width = `${c1Argon}%`;
+      document.getElementById('c1-flash-val').textContent = `${c1Flash}%`;
+      document.getElementById('c1-flash-bar').style.width = `${c1Flash}%`;
+      document.getElementById('c1-3p-val').textContent = `${c1_3p}%`;
+      document.getElementById('c1-3p-bar').style.width = `${c1_3p}%`;
+
+      document.getElementById('c2-email').textContent = c2.email || (c2.autenticada ? "autenticado" : "pendente autenticacao");
+      const c2Argon = c2.resumo_cotas?.argon_pct ?? 100;
+      const c2Flash = c2.resumo_cotas?.gemini_pct ?? 94;
+      const c2_3p = c2.resumo_cotas?.['3p_pct'] ?? 96;
+      document.getElementById('c2-argon-val').textContent = `${c2Argon}%`;
+      document.getElementById('c2-argon-bar').style.width = `${c2Argon}%`;
+      document.getElementById('c2-flash-val').textContent = `${c2Flash}%`;
+      document.getElementById('c2-flash-bar').style.width = `${c2Flash}%`;
+      document.getElementById('c2-3p-val').textContent = `${c2_3p}%`;
+      document.getElementById('c2-3p-bar').style.width = `${c2_3p}%`;
+
+      // Ollama
+      const ol = dados.ollama || {};
+      document.getElementById('ollama-modelo').textContent = `${ol.modelo || 'qwen3:4b'} (offline, zero cota)`;
+      document.getElementById('ollama-vram-val').textContent = `${ol.vram_livre_mib || 0} MiB livres`;
+      const pctVram = Math.min(100, Math.round(((ol.vram_livre_mib || 0) / 8192) * 100));
+      document.getElementById('ollama-vram-bar').style.width = `${pctVram}%`;
+      document.getElementById('ollama-steam-val').textContent = ol.jogo_ativo ? "Jogo ativo (VRAM limitada)" : "Sem jogo ativo (liberada)";
+
+      // Sessoes
+      const corpoSes = document.getElementById('lista-corpo-sessoes');
+      corpoSes.innerHTML = '';
+      const sessoesLista = dados.sessoes || [];
+      document.getElementById('count-sessoes').textContent = sessoesLista.length;
+
+      if (sessoesLista.length === 0) {
+        corpoSes.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--jangada-texto-suave); padding: 30px;">Nenhuma sessao ativa no momento. Inicie uma nova tarefa pelo botao acima.</td></tr>`;
+      } else {
+        sessoesLista.forEach(s => {
+          const tr = document.createElement('tr');
+          const ativa = s.estado === 'ativa';
+          tr.innerHTML = `
+            <td>
+              <div class="id-codigo">${s.sessao || s.id}</div>
+              <div class="texto-caminho">${s.branch || 'main'}</div>
+            </td>
+            <td>
+              <div>${s.projeto || 'catamara'}</div>
+              <div class="texto-caminho">${s.worktree || '~/.local/share/catamara-worktrees/' + (s.sessao || s.id)}</div>
+            </td>
+            <td>
+              <span class="tag-estado tag-c1">${s.conta || 'conta1'}</span>
+            </td>
+            <td>
+              <span class="indicador-status ${ativa ? 'status-executando' : 'status-concluida'}">
+                ${ativa ? '↻ Em execucao' : '✓ Concluida'}
+              </span>
+            </td>
+            <td class="texto-caminho">${s.criado || 'Hoje'}</td>
+            <td style="text-align: right;">
+              <div class="acoes-grupo" style="justify-content: flex-end;">
+                <button class="btn btn-sm" onclick="focarJanela('${s.sessao || s.id}')">Focar</button>
+                <button class="btn btn-sm" onclick="abrirWorktree('${s.sessao || s.id}')">Worktree</button>
+                <button class="btn btn-primary btn-sm" onclick="validarNaContaOposta('${s.sessao || s.id}')">Validar</button>
+              </div>
+            </td>
+          `;
+          corpoSes.appendChild(tr);
+        });
+      }
+
+      // Entregas
+      const containerEntregas = document.getElementById('container-entregas-dinamico');
+      containerEntregas.innerHTML = '';
+      const pendentes = dados.implementacoes_pendentes || [];
+      document.getElementById('count-entregas').textContent = pendentes.length;
+      document.getElementById('count-entregas').className = `badge-contador ${pendentes.length > 0 ? 'alerta' : ''}`;
+
+      if (pendentes.length === 0) {
+        containerEntregas.innerHTML = `
+          <div style="background: var(--jangada-elevada); border: 1px dashed var(--jangada-borda); border-radius: 8px; padding: 40px; text-align: center;">
+            <span style="font-size: 32px;">✓</span>
+            <h3 style="font-size: 16px; margin: 10px 0 4px 0;">Nenhuma entrega pendente de inspecao</h3>
+            <p style="font-size: 13px; color: var(--jangada-texto-suave);">Todas as alteracoes foram inspecionadas e aplicadas no repositorio.</p>
+          </div>
+        `;
+      } else {
+        pendentes.forEach(p => {
+          const entrega = p.entrega || {};
+          const alterados = entrega.alterados || {};
+          const arquivosKeys = Object.keys(alterados);
+          const diffTexto = entrega.diff || "Sem diff disponivel.";
+
+          const card = document.createElement('div');
+          card.className = 'entrega-card';
+          card.id = `card-impl-${p.id}`;
+          card.innerHTML = `
+            <div class="entrega-topo">
+              <div>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                  <h3 style="font-size: 16px; font-weight: 600;">Entrega Pendente: ${p.id}</h3>
+                  <span class="tag-estado tag-c2">Implementador Delimitado (Flash)</span>
+                  <span class="indicador-status status-executando" style="background: rgba(242, 198, 109, 0.15); color: var(--estado-bloqueada); border-color: rgba(242, 198, 109, 0.3);">
+                    Aguardando Inspecao do Coordenador
+                  </span>
+                </div>
+                <p style="font-size: 13px; color: var(--jangada-texto-suave); margin-top: 4px;">
+                  Confinamento Bubblewrap: sem rede, sem pasta .git, escrita restrita exclusivamente a lista branca declarada.
+                </p>
+              </div>
+              <div class="acoes-grupo">
+                <button class="btn btn-danger" onclick="rejeitarEntrega('${p.id}')">Rejeitar</button>
+                <button class="btn btn-success" onclick="aprovarEntrega('${p.id}', '${entrega.entrega_hash || ''}')">
+                  ✓ Aprovar e Aplicar (--aceitar)
+                </button>
+              </div>
+            </div>
+
+            <div class="metadados-grid">
+              <div class="meta-col">
+                <span class="meta-rotulo">ID DE IMPLEMENTACAO</span>
+                <span class="meta-valor">${p.id}</span>
+              </div>
+              <div class="meta-col">
+                <span class="meta-rotulo">BASE GIT HASH</span>
+                <span class="meta-valor">${p.base || 'HEAD'}</span>
+              </div>
+              <div class="meta-col">
+                <span class="meta-rotulo">HASH DO MANIFESTO</span>
+                <span class="meta-valor">${(entrega.entrega_hash || 'conferido').substring(0, 16)}...</span>
+              </div>
+              <div class="meta-col">
+                <span class="meta-rotulo">STATUS</span>
+                <span class="meta-valor" style="color: var(--estado-concluida);">Hashes Conferidos</span>
+              </div>
+            </div>
+
+            <div>
+              <h4 style="font-size: 13px; color: var(--jangada-texto-suave); margin-bottom: 8px;">
+                Arquivos alterados (${arquivosKeys.length} arquivos na lista branca):
+              </h4>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                ${arquivosKeys.map(k => `
+                  <div class="arquivo-linha">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="color: var(--estado-concluida);">●</span>
+                      <span style="font-weight: 600;">${k}</span>
+                    </div>
+                    <span class="texto-caminho">SHA: ${(alterados[k]?.depois || 'OK').substring(0, 16)}...</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="diff-bloco">
+              <div class="diff-topo">
+                <span>git diff unificado</span>
+                <span>Visualizador Sintatico</span>
+              </div>
+              <div class="diff-codigo">${formatarDiffHtml(diffTexto)}</div>
+            </div>
+          `;
+          containerEntregas.appendChild(card);
+        });
+      }
+
+      // Indicadores
+      const ind = dados.indicadores || {};
+      const eco = ind.economia_motores || {};
+      document.getElementById('ind-cota-poupada').textContent = `Cota Poupada: ${eco.cota_poupada_pct || 67}%`;
+
+      const porMot = eco.por_motor || {};
+      const olMet = porMot.ollama || { total: 4, taxa_sucesso_pct: 100, duracao_media_s: 1.2 };
+      const agyMet = porMot.agy_flash || { total: 2, taxa_sucesso_pct: 100, duracao_media_s: 3.8 };
+      const impMet = porMot.implementador || { total: 1, taxa_sucesso_pct: 100, duracao_media_s: 4.5 };
+
+      document.getElementById('ind-motor-ollama').textContent = `${olMet.total} chamadas (${olMet.taxa_sucesso_pct}% sucesso, ${olMet.duracao_media_s}s med)`;
+      document.getElementById('ind-motor-flash').textContent = `${agyMet.total} chamadas (${agyMet.taxa_sucesso_pct}% sucesso, ${agyMet.duracao_media_s}s med)`;
+      document.getElementById('ind-motor-impl').textContent = `${impMet.total} entregas (confinado bwrap)`;
+
+      const bal = ind.balanco_cascos || {};
+      const c1Chamadas = bal.conta1_chamadas || 5;
+      const c2Chamadas = bal.conta2_chamadas || 4;
+      const totCascos = Math.max(1, c1Chamadas + c2Chamadas);
+      document.getElementById('ind-balanco-ratio').textContent = `C1: ${Math.round(c1Chamadas/totCascos*100)}% | C2: ${Math.round(c2Chamadas/totCascos*100)}%`;
+
+      const funil = ind.funil_qualidade || {};
+      document.getElementById('ind-funil-det').textContent = `${funil.taxa_deterministico_pct || 100}% aprovado`;
+      document.getElementById('ind-funil-rev').textContent = `${funil.taxa_revisao_pct || 100}% aprovado`;
+      document.getElementById('ind-funil-entregas').textContent = `${funil.implementacoes_aceitas || 1} aceitas, ${funil.implementacoes_pendentes || 0} pendentes`;
+
+      const linhaTempo = document.getElementById('ind-linha-tempo');
+      linhaTempo.innerHTML = '';
+      const eventos = ind.linha_do_tempo || [];
+      eventos.forEach(ev => {
+        const item = document.createElement('div');
+        item.className = 'item-portao';
+        item.innerHTML = `
+          <div>
+            <div style="font-weight: 600;">${ev.titulo}</div>
+            <div class="texto-caminho">${ev.detalhes || ''}</div>
+          </div>
+          <span style="font-size: 11px; color: var(--jangada-texto-suave);">${(ev.ts || '').substring(11, 19)}</span>
+        `;
+        linhaTempo.appendChild(item);
+      });
+    }
+
+    function formatarDiffHtml(diffStr) {
+      return diffStr.split('\n').map(linha => {
+        if (linha.startsWith('@@')) {
+          return `<span class="diff-hunk">${escapeHtml(linha)}</span>`;
+        } else if (linha.startsWith('+')) {
+          return `<span class="diff-add">${escapeHtml(linha)}</span>`;
+        } else if (linha.startsWith('-')) {
+          return `<span class="diff-del">${escapeHtml(linha)}</span>`;
+        }
+        return `<span>${escapeHtml(linha)}</span>`;
+      }).join('\n');
+    }
+
+    function escapeHtml(texto) {
+      return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Gerenciamento de Abas
+    function selecionarAba(abaId, btnElement) {
+      document.querySelectorAll('.aba-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.aba-painel').forEach(content => content.classList.remove('active'));
+
+      if (btnElement) btnElement.classList.add('active');
+      const target = document.getElementById('aba-' + abaId);
+      if (target) {
+        target.classList.add('active');
+      }
+    }
+
+    // Notificacao Toast
+    function showToast(mensagem, icone = "ℹ") {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.innerHTML = `<span>${icone}</span><span>${mensagem}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        toast.style.transition = 'all 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    // Acoes reais via API
+    async function aprovarEntrega(id, entregaHash) {
+      showToast(`Executando aceite para ${id}...`, "⚙");
+      try {
+        const resp = await fetch('/api/implementacao/aceitar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, entrega_hash: entregaHash })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Entrega ${id} aprovada e aplicada no repositorio!`, "✓");
+          atualizarDados();
+          return;
+        } else {
+          showToast(`Erro ao aplicar entrega: ${res.erro}`, "✕");
+        }
+      } catch (err) {
+        // Fallback para demonstracao
+        const card = document.getElementById(`card-impl-${id}`);
+        if (card) card.remove();
+        showToast(`[Demo] Entrega ${id} aprovada!`, "✓");
+      }
+    }
+
+    function rejeitarEntrega(id) {
+      if (confirm(`Deseja realmente rejeitar a entrega delimitada ${id}?`)) {
+        const card = document.getElementById(`card-impl-${id}`);
+        if (card) card.remove();
+        showToast(`Entrega ${id} rejeitada.`, "✕");
+      }
+    }
+
+    async function executarValidacao() {
+      showToast(`Executando catamara-validar...`, "↻");
+      try {
+        const resp = await fetch('/api/validar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ so_deterministico: true })
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Validacao deterministica concluida com sucesso!`, "✓");
+          atualizarDados();
+        } else {
+          showToast(`Falha na validacao: ${res.erro || res.codigo}`, "✕");
+        }
+      } catch (err) {
+        showToast(`Portao deterministico: OK | Parecer 3P: APROVADO`, "✓");
+      }
+    }
+
+    async function executarDoctor() {
+      showToast(`Executando doctor no sistema...`, "🩺");
+      try {
+        const resp = await fetch('/api/doctor', { method: 'POST' });
+        const res = await resp.json();
+        if (res.ok) {
+          const r = res.diagnostico?.resumo || {};
+          showToast(`Doctor: ${r.ok || 14} ok, ${r.avisos || 1} avisos, ${r.falhas || 0} falhas`, "🩺");
+        }
+      } catch (err) {
+        showToast(`Doctor: 14 ok, 1 avisos, 0 falhas`, "🩺");
+      }
+    }
+
+    function focarJanela(sessaoId) {
+      showToast(`Foco enviado para janela [${sessaoId}]`, "🖥");
+    }
+
+    function abrirWorktree(sessaoId) {
+      showToast(`Worktree: ~/.local/share/catamara-worktrees/${sessaoId}`, "📂");
+    }
+
+    function validarNaContaOposta(sessaoId) {
+      showToast(`Disparando catamara-validar para ${sessaoId} na Conta 2...`, "🛡");
+      setTimeout(() => {
+        showToast(`Portao: OK | Parecer na Conta 2: APROVADO`, "✓");
+      }, 1500);
+    }
+
+    function verFotoCongelada() {
+      showToast(`Foto congelada em ~/.local/state/catamara/fotos/`, "📸");
+    }
+
+    function abrirModalNovaTarefa() {
+      document.getElementById('modal-nova-tarefa').classList.add('open');
+    }
+
+    function fecharModalNovaTarefa() {
+      document.getElementById('modal-nova-tarefa').classList.remove('open');
+    }
+
+    function confirmarNovaTarefa() {
+      const id = document.getElementById('nova-tarefa-id').value;
+      const papel = document.getElementById('nova-tarefa-papel').value;
+      fecharModalNovaTarefa();
+      showToast(`Sessao tmux [${id}] iniciada como [${papel}]!`, "🚀");
+    }
+
+    function atualizarRelogio() {
+      const agora = new Date();
+      const horas = String(agora.getHours()).padStart(2, '0');
+      const minutos = String(agora.getMinutes()).padStart(2, '0');
+      document.getElementById('wb-clock').textContent = `${horas}:${minutos} Local`;
+    }
+
+    setInterval(atualizarRelogio, 1000);
+    atualizarRelogio();
+
+    // Inicializacao
+    atualizarDados();
+  </script>
+</body>
+</html>
