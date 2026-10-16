@@ -449,7 +449,7 @@ def gerar_waybar_json(estado: dict[str, Any]) -> str:
     c1_str = f"C1:{c1}%" if c1 is not None else "C1:--"
     c2_str = f"C2:{c2}%" if c2 is not None else "C2:--"
 
-    # Icone de vela dupla do catamara (Nerd Font: nf-md-sail_boat) alinhado com a identidade da Jangada
+    # Icone de vela dupla do catamara (Nerd Font: nf-md-sail_boat)
     partes = [f"󰻄󰻄 {c1_str} {c2_str}"]
     if ses_ativas:
         partes.append(f"{ses_ativas} ativa" if ses_ativas == 1 else f"{ses_ativas} ativas")
