@@ -232,25 +232,23 @@ limpar_proxy() {
 }
 
 if [[ "$modo_mostrar" -eq 0 && "$dbus_modo" == "proxy" ]]; then
-  proxy_dir="$(mktemp -d -t catamara-dbus.XXXXXX)"
+  proxy_dir="$rt_dir/catamara-isolar-$$"
+  mkdir -m 0700 -p "$proxy_dir" 2>/dev/null || true
   proxy_sock="$proxy_dir/bus"
-  proxy_fifo="$proxy_dir/sync.fifo"
-  mkfifo "$proxy_fifo"
+  rm -f "$proxy_sock" 2>/dev/null || true
 
-  xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$proxy_sock" \
-    --filter --talk=org.freedesktop.Notifications --fd=3 3>"$proxy_fifo" &
-  proxy_pid=$!
-
-  trap limpar_proxy EXIT INT TERM
+  exec {dbus_sinc_fd}< <(exec xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$proxy_sock" \
+    --filter --talk=org.freedesktop.Notifications --fd=1 2>/dev/null)
 
   local_sinc=""
-  if read -r -t 4 local_sinc < "$proxy_fifo"; then
+  if read -r -N1 -t 4 -u "$dbus_sinc_fd" local_sinc && [[ -S "$proxy_sock" ]]; then
     :
   else
-    echo "Erro: xdg-dbus-proxy nao respondeu no tempo limite." >&2
-    exit 5
+    exec {dbus_sinc_fd}<&- 2>/dev/null || true
+    dbus_sinc_fd=""
+    rm -rf "$proxy_dir" 2>/dev/null || true
+    dbus_modo="nenhum"
   fi
-  rm -f "$proxy_fifo" 2>/dev/null || true
 fi
 
 bwrap_args=()
@@ -302,7 +300,57 @@ if [[ -n "${CATAMARA_ISOLAR_OCULTAR_EXTRA:-}" ]]; then
   done
 fi
 
-for oculto in "${caminhos_ocultar[@]}"; do
+repo_raiz="$(catamara_git_seguro rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if [[ "$perfil" =~ ^(verificacao|verificacao-rede)$ ]]; then
+  if [[ "$repo_raiz" != "$HOME" ]]; then
+    bwrap_args+=(--ro-bind "$repo_raiz" "$repo_raiz")
+  fi
+  bwrap_args+=(--chdir "$PWD")
+elif [[ "$perfil" == "implementacao" ]]; then
+  if [[ -n "${CATAMARA_ISOLAR_MONTAGEM:-}" && -f "${CATAMARA_ISOLAR_MONTAGEM:-}" ]]; then
+    while IFS= read -r linha; do
+      [[ -n "$linha" ]] && bwrap_args+=($linha)
+    done < "$CATAMARA_ISOLAR_MONTAGEM"
+  elif [[ -n "${CATAMARA_IMPLEMENTACAO_MANIFESTO:-}" ]]; then
+    if [[ -f "$CATAMARA_CORE_PY/delegacao/implementacao.py" ]]; then
+      mapfile -t args_impl < <(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" montagem "$CATAMARA_IMPLEMENTACAO_MANIFESTO" "$pasta_conta_alvo" 2>/dev/null || true)
+      for arg in "${args_impl[@]}"; do
+        [[ -n "$arg" ]] && bwrap_args+=($arg)
+      done
+    fi
+  else
+    [[ "$repo_raiz" != "$HOME" ]] && bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
+    bwrap_args+=(--chdir "$PWD")
+  fi
+elif [[ "$perfil" == "agente" ]]; then
+  if [[ -n "${CATAMARA_ISOLAR_FOTO:-}" && -d "${CATAMARA_ISOLAR_FOTO:-}" ]]; then
+    bwrap_args+=(--ro-bind "$CATAMARA_ISOLAR_FOTO" "$CATAMARA_ISOLAR_FOTO")
+    bwrap_args+=(--chdir "$CATAMARA_ISOLAR_FOTO")
+  else
+    if [[ "$repo_raiz" != "$HOME" ]]; then
+      bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
+    fi
+    bwrap_args+=(--chdir "$PWD")
+    if catamara_git_seguro rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git_dir="$(catamara_git_seguro rev-parse --git-dir 2>/dev/null || true)"
+      git_commondir="$(catamara_git_seguro rev-parse --git-common-dir 2>/dev/null || true)"
+      for gd in "$git_dir" "$git_commondir"; do
+        [[ -z "$gd" ]] && continue
+        gd_abs="$(cd "$gd" 2>/dev/null && pwd || true)"
+        [[ -z "$gd_abs" ]] && continue
+        for it in config hooks commondir gitdir config.worktree worktrees modules; do
+          if [[ -e "$gd_abs/$it" ]]; then
+            bwrap_args+=(--ro-bind "$gd_abs/$it" "$gd_abs/$it")
+          fi
+        done
+      done
+    fi
+  fi
+fi
+
+# Protecoes obrigatorias e isolamento de conta SEMPRE por cima de repo_raiz
+for oculto in "${caminhos_ocultar[@]}" "$HOME/.gemini/google_accounts.json" "$HOME/.gemini/oauth_creds.json"; do
   if [[ -e "$oculto" ]]; then
     if [[ -d "$oculto" ]]; then
       bwrap_args+=(--tmpfs "$oculto")
@@ -357,59 +405,17 @@ if [[ "$dbus_modo" == "proxy" ]]; then
     bwrap_args+=(--ro-bind "$rt_dir/bus" "$rt_dir/bus")
     bwrap_args+=(--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$rt_dir/bus")
   else
-    bwrap_args+=(--ro-bind "$proxy_sock" "$rt_dir/bus")
+    bwrap_args+=(--ro-bind "$proxy_sock" "$rt_dir/bus" --sync-fd "$dbus_sinc_fd")
     bwrap_args+=(--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$rt_dir/bus")
   fi
 else
   bwrap_args+=(--unsetenv DBUS_SESSION_BUS_ADDRESS)
 fi
 
-repo_raiz="$(catamara_git_seguro rev-parse --show-toplevel 2>/dev/null || pwd)"
-
-if [[ "$perfil" =~ ^(verificacao|verificacao-rede)$ ]]; then
-  bwrap_args+=(--ro-bind "$repo_raiz" "$repo_raiz")
-  bwrap_args+=(--chdir "$PWD")
-elif [[ "$perfil" == "implementacao" ]]; then
-  if [[ -n "${CATAMARA_ISOLAR_MONTAGEM:-}" && -f "${CATAMARA_ISOLAR_MONTAGEM:-}" ]]; then
-    while IFS= read -r linha; do
-      [[ -n "$linha" ]] && bwrap_args+=($linha)
-    done < "$CATAMARA_ISOLAR_MONTAGEM"
-  elif [[ -n "${CATAMARA_IMPLEMENTACAO_MANIFESTO:-}" ]]; then
-    if [[ -f "$CATAMARA_CORE_PY/delegacao/implementacao.py" ]]; then
-      mapfile -t args_impl < <(python3 "$CATAMARA_CORE_PY/delegacao/implementacao.py" montagem "$CATAMARA_IMPLEMENTACAO_MANIFESTO" "$pasta_conta_alvo" 2>/dev/null || true)
-      for arg in "${args_impl[@]}"; do
-        [[ -n "$arg" ]] && bwrap_args+=($arg)
-      done
-    fi
-  else
-    bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
-    bwrap_args+=(--chdir "$PWD")
-  fi
-elif [[ "$perfil" == "agente" ]]; then
-  if [[ -n "${CATAMARA_ISOLAR_FOTO:-}" && -d "${CATAMARA_ISOLAR_FOTO:-}" ]]; then
-    bwrap_args+=(--ro-bind "$CATAMARA_ISOLAR_FOTO" "$CATAMARA_ISOLAR_FOTO")
-    bwrap_args+=(--chdir "$CATAMARA_ISOLAR_FOTO")
-  else
-    bwrap_args+=(--bind "$repo_raiz" "$repo_raiz")
-    bwrap_args+=(--chdir "$PWD")
-    if catamara_git_seguro rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      git_dir="$(catamara_git_seguro rev-parse --git-dir 2>/dev/null || true)"
-      git_commondir="$(catamara_git_seguro rev-parse --git-common-dir 2>/dev/null || true)"
-      for gd in "$git_dir" "$git_commondir"; do
-        [[ -z "$gd" ]] && continue
-        gd_abs="$(cd "$gd" 2>/dev/null && pwd || true)"
-        [[ -z "$gd_abs" ]] && continue
-        for it in config hooks commondir gitdir config.worktree worktrees modules; do
-          if [[ -e "$gd_abs/$it" ]]; then
-            bwrap_args+=(--ro-bind "$gd_abs/$it" "$gd_abs/$it")
-          fi
-        done
-      done
-    fi
-  fi
-fi
-
 if [[ "$perfil" == "agente" && -d "$CATAMARA_PATH/core/agentes/agy/agents" ]]; then
+  if [[ "$modo_mostrar" -eq 0 ]]; then
+    mkdir -p "$pasta_conta_alvo/agents" 2>/dev/null || true
+  fi
   bwrap_args+=(--ro-bind "$CATAMARA_PATH/core/agentes/agy/agents" "$HOME/.gemini/antigravity-cli/agents")
 fi
 
@@ -440,7 +446,7 @@ fi
 
 for fd_path in /proc/self/fd/*; do
   fd="${fd_path##*/}"
-  if [[ "$fd" =~ ^[0-9]+$ ]] && (( fd > 2 )); then
+  if [[ "$fd" =~ ^[0-9]+$ ]] && (( fd > 2 )) && [[ "$fd" != "${dbus_sinc_fd:-}" ]]; then
     eval "exec ${fd}<&-" 2>/dev/null || true
   fi
 done
