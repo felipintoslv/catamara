@@ -402,6 +402,14 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(conteudo)
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _enviar_erro(self, mensagem: str, status: int = 400) -> None:
         self._enviar_json({"ok": False, "erro": mensagem}, status=status)
 
@@ -505,14 +513,14 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
 
                 if abrir_term:
                     sid = res["sessao"]
+                    term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
                     term_cmd = [
-                        "setsid", "-f",
-                        "jangada-terminal",
+                        term_bin,
                         "--classe", f"catamara-sessao-{sid}",
                         "--titulo", f"Catamara: {sid}",
                         "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
                     ]
-                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
                 self._enviar_json({"ok": True, "sessao": res})
             except Exception as exc:
@@ -529,26 +537,36 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
 
                 focado = False
                 try:
+                    lua_cmd = f'hl.dsp.focus({{ window = "class:catamara-sessao-{sid}" }})'
                     proc_foco = subprocess.run(
-                        ["hyprctl", "dispatch", "focuswindow", f"title:Catamara: {sid}"],
+                        ["hyprctl", "dispatch", lua_cmd],
                         capture_output=True,
                         text=True,
                         check=False,
                     )
-                    if proc_foco.returncode == 0 and "ok" in proc_foco.stdout.lower():
+                    if proc_foco.returncode == 0 and "ok" in proc_foco.stdout.lower() and "warning" not in proc_foco.stdout.lower():
                         focado = True
+                    else:
+                        proc_foco2 = subprocess.run(
+                            ["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "title:Catamara: {sid}" }})'],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if proc_foco2.returncode == 0 and "ok" in proc_foco2.stdout.lower() and "warning" not in proc_foco2.stdout.lower():
+                            focado = True
                 except Exception:
                     pass
 
                 if not focado:
+                    term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
                     term_cmd = [
-                        "setsid", "-f",
-                        "jangada-terminal",
+                        term_bin,
                         "--classe", f"catamara-sessao-{sid}",
                         "--titulo", f"Catamara: {sid}",
                         "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
                     ]
-                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
                 self._enviar_json({"ok": True, "sessao": sid, "focado": focado})
             except Exception as exc:
@@ -574,14 +592,14 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                     self._enviar_erro("worktree nao encontrada", status=404)
                     return
 
+                term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
                 term_cmd = [
-                    "setsid", "-f",
-                    "jangada-terminal",
+                    term_bin,
                     "--classe", f"catamara-worktree-{sid}",
                     "--titulo", f"Worktree: {sid}",
                     "-e", "bash", "-c", f"cd '{wt_dir}' && exec bash",
                 ]
-                subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 self._enviar_json({"ok": True, "worktree": wt_dir})
             except Exception as exc:
                 self._enviar_erro(f"falha ao abrir worktree: {exc}", status=500)
@@ -638,9 +656,25 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 dados = self._ler_corpo_json()
                 so_det = bool(dados.get("so_deterministico", True))
+                sid = dados.get("sessao")
                 cmd = [str(RAIZ_CATAMARA / "bin" / "catamara-validar"), "--json"]
                 if so_det:
                     cmd.append("--so-deterministico")
+                if sid:
+                    sessao_json = estado_dir() / "sessoes" / f"{sid}.json"
+                    if sessao_json.is_file():
+                        try:
+                            s_data = json.loads(sessao_json.read_text(encoding="utf-8"))
+                            alvo = s_data.get("worktree") or s_data.get("repo")
+                            if alvo and Path(alvo).exists():
+                                cmd.extend(["--repo", str(alvo)])
+                            if s_data.get("conta"):
+                                cmd.extend(["--conta-autor", str(s_data["conta"])])
+                        except Exception:
+                            pass
+                elif dados.get("repo"):
+                    cmd.extend(["--repo", str(dados.get("repo"))])
+
                 proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 notificar_waybar()
                 saida_json = None
@@ -673,7 +707,9 @@ def iniciar_servidor(porta: int = 8770, abrir_navegador: bool = False) -> None:
     # Vincula estritamente a 127.0.0.1 para seguranca
     endereco = ("127.0.0.1", porta)
     try:
-        with socketserver.TCPServer(endereco, RequisicaoPainelHandler) as httpd:
+        http.server.ThreadingHTTPServer.allow_reuse_address = True
+        with http.server.ThreadingHTTPServer(endereco, RequisicaoPainelHandler) as httpd:
+            httpd.daemon_threads = True
             url = f"http://127.0.0.1:{porta}"
             print(f"Central de Tarefas do Catamara ativa em {url}")
             if abrir_navegador:

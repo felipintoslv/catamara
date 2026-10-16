@@ -1744,7 +1744,6 @@
     }
 
     async function rejeitarEntrega(id) {
-      if (!confirm(`Deseja realmente rejeitar a entrega delimitada ${id}?`)) return;
       showToast(`Rejeitando entrega ${id}...`, "⏳");
       try {
         const resp = await fetch('/api/implementacao/rejeitar', {
@@ -1835,7 +1834,6 @@
     }
 
     async function encerrarSessao(sessaoId) {
-      if (!confirm(`Deseja realmente encerrar a sessao ${sessaoId}?`)) return;
       showToast(`Encerrando sessao ${sessaoId}...`, "⏳");
       try {
         const resp = await fetch('/api/sessoes/encerrar', {
@@ -1861,7 +1859,7 @@
         const resp = await fetch('/api/validar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ so_deterministico: false })
+          body: JSON.stringify({ sessao: sessaoId, so_deterministico: false })
         });
         const res = await resp.json();
         if (res.ok) {
