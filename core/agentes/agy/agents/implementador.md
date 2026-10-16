@@ -1,6 +1,12 @@
 ---
 name: implementador
 description: Implementa alteracoes exclusivamente nos arquivos autorizados pelo contrato.
+subagent: false
+tools:
+  - view_file
+  - write_to_file
+  - replace_file_content
+  - multi_replace_file_content
 ---
 
 # Implementador

@@ -70,6 +70,7 @@ case "$subcomando" in
       python3 "$CATAMARA_CORE_PY/contas/contas.py" confianca sincronizar >/dev/null
       exec python3 "$CATAMARA_CORE_PY/contas/contas.py" status "$conta_alvo"
     else
+      shift
       exec python3 "$CATAMARA_CORE_PY/contas/contas.py" "$acao" "$@"
     fi
     ;;
