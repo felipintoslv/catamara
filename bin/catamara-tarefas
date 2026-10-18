@@ -53,11 +53,20 @@ def barra_progresso(pct: int | float | None, largura: int = 14, cor: str = COR_P
     if pct is None:
         return f"{COR_BORDA}{'░' * largura}{R} {COR_SUAVE}Pendente{R}"
     pct_val = max(0, min(100, int(round(pct))))
+    if pct_val < 15:
+        cor_efetiva = COR_FALHOU
+        cor_texto = COR_FALHOU
+    elif pct_val < 30:
+        cor_efetiva = COR_BLOQUEADA
+        cor_texto = COR_BLOQUEADA
+    else:
+        cor_efetiva = cor
+        cor_texto = COR_TEXTO
     preenchido = int(largura * (pct_val / 100))
     vazio = largura - preenchido
     bloco = "█" * preenchido
     fundo = "░" * vazio
-    return f"{cor}{bloco}{COR_BORDA}{fundo}{R} {COR_TEXTO}{pct_val:3d}%{R}"
+    return f"{cor_efetiva}{bloco}{COR_BORDA}{fundo}{R} {cor_texto}{pct_val:3d}%{R}"
 
 
 def testar_porta_ativa(host: str, porta: int) -> bool:
@@ -332,7 +341,8 @@ def desenhar_painel(estado: dict[str, Any]) -> None:
                 print(f"    {COR_CONCLUIDA}●{R} {B}{arq}{R}  {COR_BORDA}SHA: {str(info.get('depois'))[:16]}...{R}")
             if ent.get("diff"):
                 print(f"\n  {COR_BORDA}┌── [Visualizacao do git diff] ────────────────────────────────────────────────┐{R}")
-                for ln in ent.get("diff", "").splitlines()[:10]:
+                diff_linhas = ent.get("diff", "").splitlines()
+                for ln in diff_linhas[:12]:
                     if ln.startswith("@@"):
                         print(f"  {COR_BORDA}│{R} {COR_PRIMARIA}{ln}{R}")
                     elif ln.startswith("+"):
@@ -341,6 +351,8 @@ def desenhar_painel(estado: dict[str, Any]) -> None:
                         print(f"  {COR_BORDA}│{R} {COR_FALHOU}{ln}{R}")
                     else:
                         print(f"  {COR_BORDA}│{R} {ln}")
+                if len(diff_linhas) > 12:
+                    print(f"  {COR_BORDA}│{R} {COR_SUAVE}... (+ {len(diff_linhas) - 12} linhas omitidas){R}")
                 print(f"  {COR_BORDA}└──────────────────────────────────────────────────────────────────────────────┘{R}")
             print(f"  {B}Acoes do Coordenador:{R}  {COR_CONCLUIDA}catamara delegar --aceitar {p.get('id')} --entrega {ent.get('entrega_hash')}{R}")
     print(div)

@@ -183,9 +183,9 @@
     }
 
     .btn:hover {
-      border: 2px solid var(--jangada-primaria);
+      border-color: var(--jangada-primaria);
       background: var(--jangada-elevada-hover);
-      padding: 7px 15px;
+      box-shadow: inset 0 0 0 1px var(--jangada-primaria);
     }
 
     .btn:focus-visible {
@@ -226,6 +226,17 @@
     .btn-danger:hover {
       background: rgba(240, 157, 147, 0.25);
       border-color: var(--estado-falhou);
+    }
+
+    .btn-revisao {
+      background: rgba(201, 182, 242, 0.12);
+      color: var(--estado-revisao);
+      border-color: rgba(201, 182, 242, 0.4);
+    }
+
+    .btn-revisao:hover {
+      background: rgba(201, 182, 242, 0.22);
+      border-color: var(--estado-revisao);
     }
 
     .btn-sm {
@@ -383,6 +394,30 @@
     .cor-primaria { background: var(--jangada-primaria); }
     .cor-revisao { background: var(--estado-revisao); }
     .cor-concluida { background: var(--estado-concluida); }
+    .cor-aviso { background: var(--estado-bloqueada); }
+    .cor-critico { background: var(--estado-falhou); }
+
+    .status-pill {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(193, 199, 206, 0.08);
+      border: 1px solid var(--jangada-borda);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .status-pill.ok {
+      color: var(--estado-concluida);
+      border-color: rgba(150, 214, 168, 0.3);
+      background: rgba(150, 214, 168, 0.1);
+    }
+    .status-pill.alerta {
+      color: var(--estado-falhou);
+      border-color: rgba(240, 157, 147, 0.3);
+      background: rgba(240, 157, 147, 0.1);
+    }
 
     .card-rodape {
       border-top: 1px solid var(--jangada-borda);
@@ -637,8 +672,28 @@
     }
 
     .diff-codigo {
-      padding: 12px 14px;
+      padding: 8px 0;
       white-space: pre;
+    }
+
+    .diff-linha {
+      display: flex;
+      width: 100%;
+      padding: 1px 12px;
+      line-height: 1.5;
+    }
+
+    .diff-num {
+      width: 34px;
+      color: rgba(193, 199, 206, 0.4);
+      user-select: none;
+      text-align: right;
+      padding-right: 12px;
+      flex-shrink: 0;
+    }
+
+    .diff-txt {
+      flex: 1;
     }
 
     .diff-hunk {
@@ -873,8 +928,8 @@
         <button class="btn" onclick="executarDoctor()">
           Doctor
         </button>
-        <button class="btn" onclick="executarValidacao()">
-          Validar
+        <button class="btn" onclick="executarValidacao()" title="Executa o portão determinístico local offline (sem consumo de cota de nuvem)">
+          Portão Local (Zero Cota)
         </button>
       </div>
     </header>
@@ -1000,21 +1055,15 @@
             </div>
           </div>
           <div class="piscina-item">
-            <div class="piscina-label">
+            <div class="piscina-label" style="align-items: center;">
               <span class="piscina-nome">Status Steam / Jogos</span>
-              <span class="piscina-valor" id="ollama-steam-val" style="color: var(--estado-concluida);">Sem jogo ativo</span>
-            </div>
-            <div class="barra-trilho">
-              <div class="barra-preenchimento cor-concluida" style="width: 100%;"></div>
+              <span class="status-pill ok" id="ollama-steam-val">● Sem jogo ativo (liberada)</span>
             </div>
           </div>
           <div class="piscina-item">
-            <div class="piscina-label">
+            <div class="piscina-label" style="align-items: center;">
               <span class="piscina-nome">Trava flock local</span>
-              <span class="piscina-valor" id="ollama-lock-val">Desocupada (local.lock)</span>
-            </div>
-            <div class="barra-trilho">
-              <div class="barra-preenchimento cor-concluida" style="width: 100%;"></div>
+              <span class="status-pill ok" id="ollama-lock-val">● Desocupada</span>
             </div>
           </div>
         </div>
@@ -1299,9 +1348,9 @@
       </div>
 
       <!-- Preview de destino da pasta -->
-      <div id="preview-destino-container" style="background: var(--jangada-fundo); border: 1px solid var(--jangada-borda); border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 12px;">
+      <div id="preview-destino-container" style="background: var(--jangada-superficie); border: 1px solid var(--jangada-borda); border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 12px;">
         <div style="color: var(--jangada-texto-suave); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">Destino onde a pasta sera criada:</div>
-        <div id="preview-destino-caminho" style="font-family: var(--fonte-mono); color: var(--jangada-primaria); word-break: break-all; font-weight: 500;">
+        <div id="preview-destino-caminho" style="font-family: var(--font-mono); color: var(--jangada-primaria); word-break: break-all; font-weight: 500;">
           ~/.local/share/catamara-worktrees/...
         </div>
         <div id="preview-destino-detalhe" style="color: var(--jangada-texto-suave); margin-top: 5px; font-size: 11px; line-height: 1.4;">
@@ -1464,27 +1513,39 @@
       const c1 = dados.contas?.[0] || dados.contas_map?.conta1 || {};
       const c2 = dados.contas?.[1] || dados.contas_map?.conta2 || {};
 
+      function aplicarEstiloCota(valId, barId, pct, classePadrao) {
+        const valEl = document.getElementById(valId);
+        const barEl = document.getElementById(barId);
+        if (!valEl || !barEl) return;
+        valEl.textContent = `${pct}%`;
+        barEl.style.width = `${pct}%`;
+        if (pct < 15) {
+          barEl.className = 'barra-preenchimento cor-critico';
+          valEl.style.color = 'var(--estado-falhou)';
+        } else if (pct < 30) {
+          barEl.className = 'barra-preenchimento cor-aviso';
+          valEl.style.color = 'var(--estado-bloqueada)';
+        } else {
+          barEl.className = `barra-preenchimento ${classePadrao}`;
+          valEl.style.color = 'var(--jangada-texto)';
+        }
+      }
+
       document.getElementById('c1-email').textContent = c1.email || (c1.autenticada ? "autenticado" : "pendente autenticacao");
       const c1Argon = c1.resumo_cotas?.argon_pct ?? 80;
       const c1Flash = c1.resumo_cotas?.gemini_pct ?? 99;
       const c1_3p = c1.resumo_cotas?.['3p_pct'] ?? 100;
-      document.getElementById('c1-argon-val').textContent = `${c1Argon}%`;
-      document.getElementById('c1-argon-bar').style.width = `${c1Argon}%`;
-      document.getElementById('c1-flash-val').textContent = `${c1Flash}%`;
-      document.getElementById('c1-flash-bar').style.width = `${c1Flash}%`;
-      document.getElementById('c1-3p-val').textContent = `${c1_3p}%`;
-      document.getElementById('c1-3p-bar').style.width = `${c1_3p}%`;
+      aplicarEstiloCota('c1-argon-val', 'c1-argon-bar', c1Argon, 'cor-primaria');
+      aplicarEstiloCota('c1-flash-val', 'c1-flash-bar', c1Flash, 'cor-primaria');
+      aplicarEstiloCota('c1-3p-val', 'c1-3p-bar', c1_3p, 'cor-primaria');
 
       document.getElementById('c2-email').textContent = c2.email || (c2.autenticada ? "autenticado" : "pendente autenticacao");
       const c2Argon = c2.resumo_cotas?.argon_pct ?? 100;
       const c2Flash = c2.resumo_cotas?.gemini_pct ?? 94;
       const c2_3p = c2.resumo_cotas?.['3p_pct'] ?? 96;
-      document.getElementById('c2-argon-val').textContent = `${c2Argon}%`;
-      document.getElementById('c2-argon-bar').style.width = `${c2Argon}%`;
-      document.getElementById('c2-flash-val').textContent = `${c2Flash}%`;
-      document.getElementById('c2-flash-bar').style.width = `${c2Flash}%`;
-      document.getElementById('c2-3p-val').textContent = `${c2_3p}%`;
-      document.getElementById('c2-3p-bar').style.width = `${c2_3p}%`;
+      aplicarEstiloCota('c2-argon-val', 'c2-argon-bar', c2Argon, 'cor-revisao');
+      aplicarEstiloCota('c2-flash-val', 'c2-flash-bar', c2Flash, 'cor-revisao');
+      aplicarEstiloCota('c2-3p-val', 'c2-3p-bar', c2_3p, 'cor-revisao');
 
       // Ollama
       const ol = dados.ollama || {};
@@ -1492,7 +1553,29 @@
       document.getElementById('ollama-vram-val').textContent = `${ol.vram_livre_mib || 0} MiB livres`;
       const pctVram = Math.min(100, Math.round(((ol.vram_livre_mib || 0) / 8192) * 100));
       document.getElementById('ollama-vram-bar').style.width = `${pctVram}%`;
-      document.getElementById('ollama-steam-val').textContent = ol.jogo_ativo ? "Jogo ativo (VRAM limitada)" : "Sem jogo ativo (liberada)";
+      
+      const steamEl = document.getElementById('ollama-steam-val');
+      if (steamEl) {
+        if (ol.jogo_ativo) {
+          steamEl.textContent = "● Jogo ativo (VRAM limitada)";
+          steamEl.className = "status-pill alerta";
+        } else {
+          steamEl.textContent = "● Sem jogo ativo (liberada)";
+          steamEl.className = "status-pill ok";
+        }
+      }
+
+      const lockEl = document.getElementById('ollama-lock-val');
+      if (lockEl) {
+        const lockOcupada = dados.trava_local?.ocupada || false;
+        if (lockOcupada) {
+          lockEl.textContent = "● Ocupada (local.lock)";
+          lockEl.className = "status-pill alerta";
+        } else {
+          lockEl.textContent = "● Desocupada";
+          lockEl.className = "status-pill ok";
+        }
+      }
 
       // Sessoes
       const corpoSes = document.getElementById('lista-corpo-sessoes');
@@ -1528,7 +1611,7 @@
               <div class="acoes-grupo" style="justify-content: flex-end;">
                 <button class="btn btn-sm" onclick="focarJanela('${s.sessao || s.id}')">Focar</button>
                 <button class="btn btn-sm" onclick="abrirWorktree('${s.sessao || s.id}')">Worktree</button>
-                <button class="btn btn-primary btn-sm" onclick="validarNaContaOposta('${s.sessao || s.id}')">Validar</button>
+                <button class="btn btn-sm btn-revisao" onclick="validarNaContaOposta('${s.sessao || s.id}')" title="Revisão cruzada na conta oposta usando Claude Opus 5.5 (3P) ou Argon">Revisar 3P</button>
                 ${ativa ? `<button class="btn btn-sm btn-danger" onclick="encerrarSessao('${s.sessao || s.id}')">Encerrar</button>` : ''}
               </div>
             </td>
@@ -1672,19 +1755,58 @@
         `;
         linhaTempo.appendChild(item);
       });
+
+      // Portao Deterministico e Parecer do Revisor
+      const ultVal = dados.historico?.validar?.[0];
+      if (ultVal) {
+        const detOk = ultVal.deterministico_ok === true && ultVal.codigo === 0;
+        const gateStatus = detOk ? '✓ OK' : '✗ Falhou';
+        const gateCor = detOk ? 'var(--estado-concluida)' : 'var(--estado-falhou)';
+        const gGitleaks = document.getElementById('gate-gitleaks');
+        if (gGitleaks) { gGitleaks.textContent = `${gateStatus} (0 segredos)`; gGitleaks.style.color = gateCor; }
+        const gBash = document.getElementById('gate-bash');
+        if (gBash) { gBash.textContent = `${gateStatus} (scripts)`; gBash.style.color = gateCor; }
+        const gPy = document.getElementById('gate-python');
+        if (gPy) { gPy.textContent = `${gateStatus} (compilacao AST)`; gPy.style.color = gateCor; }
+        const gTestes = document.getElementById('gate-testes');
+        if (gTestes) { gTestes.textContent = `${gateStatus} (testes)`; gTestes.style.color = gateCor; }
+
+        if (ultVal.modelo) {
+          const revMod = document.getElementById('rev-modelo');
+          if (revMod) revMod.textContent = `REVISOR: ${ultVal.modelo}`;
+        }
+        if (ultVal.conta_revisor) {
+          const revConta = document.getElementById('rev-conta');
+          if (revConta) revConta.textContent = `CONTA: ${ultVal.conta_revisor} (autor foi ${ultVal.conta_autor || 'oposta'})`;
+        }
+        if (ultVal.foto) {
+          const revFoto = document.getElementById('rev-foto');
+          if (revFoto) revFoto.textContent = `Foto: ${ultVal.foto} (read-only)`;
+        }
+        if (ultVal.veredito) {
+          const revVer = document.getElementById('rev-veredito');
+          if (revVer) {
+            const aprovado = ultVal.veredito.toLowerCase() === 'aprovado';
+            revVer.textContent = `VEREDITO: ${ultVal.veredito.toUpperCase()}`;
+            revVer.className = `indicador-status ${aprovado ? 'status-concluida' : 'status-falhou'}`;
+          }
+        }
+      }
     }
 
     function formatarDiffHtml(diffStr) {
-      return diffStr.split('\n').map(linha => {
+      if (!diffStr) return '';
+      return diffStr.split('\n').map((linha, idx) => {
+        let classe = '';
         if (linha.startsWith('@@')) {
-          return `<span class="diff-hunk">${escapeHtml(linha)}</span>`;
+          classe = 'diff-hunk';
         } else if (linha.startsWith('+')) {
-          return `<span class="diff-add">${escapeHtml(linha)}</span>`;
+          classe = 'diff-add';
         } else if (linha.startsWith('-')) {
-          return `<span class="diff-del">${escapeHtml(linha)}</span>`;
+          classe = 'diff-del';
         }
-        return `<span>${escapeHtml(linha)}</span>`;
-      }).join('\n');
+        return `<div class="diff-linha ${classe}"><span class="diff-num">${idx + 1}</span><span class="diff-txt">${escapeHtml(linha)}</span></div>`;
+      }).join('');
     }
 
     function escapeHtml(texto) {
@@ -1744,16 +1866,18 @@
     }
 
     async function rejeitarEntrega(id) {
+      const motivo = prompt(`Informe o motivo da rejeicao da entrega ${id} (orientacao para o agente):`);
+      if (motivo === null) return;
       showToast(`Rejeitando entrega ${id}...`, "⏳");
       try {
         const resp = await fetch('/api/implementacao/rejeitar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: id })
+          body: JSON.stringify({ id: id, motivo: motivo.trim() || "rejeitado pelo operador" })
         });
         const res = await resp.json();
         if (res.ok) {
-          showToast(`Entrega ${id} rejeitada.`, "✓");
+          showToast(`Entrega ${id} rejeitada com feedback registrado.`, "✓");
           atualizarDados();
         } else {
           showToast(`Erro ao rejeitar: ${res.erro || 'falha'}`, "✕");

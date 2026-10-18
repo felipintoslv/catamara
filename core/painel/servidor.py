@@ -537,18 +537,19 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
 
                 focado = False
                 try:
-                    lua_cmd = f'hl.dsp.focus({{ window = "class:catamara-sessao-{sid}" }})'
-                    proc_foco = subprocess.run(
-                        ["hyprctl", "dispatch", lua_cmd],
+                    # 1. Tenta focuswindow nativo por classe
+                    proc_foco1 = subprocess.run(
+                        ["hyprctl", "dispatch", "focuswindow", f"^catamara-sessao-{sid}$"],
                         capture_output=True,
                         text=True,
                         check=False,
                     )
-                    if proc_foco.returncode == 0 and "ok" in proc_foco.stdout.lower() and "warning" not in proc_foco.stdout.lower():
+                    if proc_foco1.returncode == 0 and "ok" in proc_foco1.stdout.lower() and "warning" not in proc_foco1.stdout.lower():
                         focado = True
                     else:
+                        # 2. Tenta por título
                         proc_foco2 = subprocess.run(
-                            ["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "title:Catamara: {sid}" }})'],
+                            ["hyprctl", "dispatch", "focuswindow", f"title:^Catamara: {sid}$"],
                             capture_output=True,
                             text=True,
                             check=False,
