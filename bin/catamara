@@ -60,6 +60,23 @@ case "$subcomando" in
     if [[ "$acao" == "login" ]]; then
       shift
       conta_alvo="${1:-$CATAMARA_CONTA_PADRAO}"
+      if [[ "$conta_alvo" == "claude" ]]; then
+        if ! command -v claude >/dev/null 2>&1; then
+          echo "Erro: executavel 'claude' nao encontrado no PATH." >&2
+          echo "Instale o Claude Code oficial ou configure seu ambiente PATH." >&2
+          exit 1
+        fi
+        echo "Abrindo Claude Code interativo. No prompt inicial, digite /login para autenticar."
+        exec claude
+      elif [[ "$conta_alvo" == "codex" ]]; then
+        if ! command -v codex >/dev/null 2>&1; then
+          echo "Erro: executavel 'codex' nao encontrado no PATH." >&2
+          echo "Instale o Codex CLI ou configure seu ambiente PATH." >&2
+          exit 1
+        fi
+        echo "Iniciando autenticacao do Codex CLI..."
+        exec codex login
+      fi
       if ! catamara_pasta_conta "$conta_alvo" >/dev/null 2>&1; then
         echo "Erro: nome de conta invalido: '$conta_alvo'" >&2
         exit 2
@@ -105,6 +122,10 @@ case "$subcomando" in
 
   tarefas|painel)
     exec "$CATAMARA_PATH/bin/catamara-tarefas" "$@"
+    ;;
+
+  tarefas-qt)
+    exec "$CATAMARA_PATH/bin/catamara-tarefas-qt" "$@"
     ;;
 
   config)

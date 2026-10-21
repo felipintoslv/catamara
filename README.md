@@ -2,30 +2,30 @@
 
 ```text
                 |                  JANGADA · CATAMARÃ
-                |\                 Arquitetura Multiagente de Casco Duplo
-                | \                Coordenador Argon + Executor Flash + Revisor Opus + Motor Local Ollama
+                |\                 Frota Multiagente N-Cascos
+                | \                Coordenador Argon + Executor Flash + Revisor Flexível + Motor Local
                 |  \               
-                | (*) \            • Casco 1 (conta1): Sessão Principal / Coordenador
-                |      \           • Casco 2 (conta2): Execução Paralela / Revisão Cruzada
-                |_______\          • Motor Local:      Ollama (qwen3:4b) sob trava exclusiva
+                | (*) \            • Casco 1 (conta1): Sessão Principal / Coordenador (Argon ativo)
+                |      \           • Casco 2 (conta2): Execução Paralela / Especialistas (Sem Argon)
+                |_______\          • Frota N-Cascos:   Claude Code, Codex CLI, Agy isolado e Ollama
      ___________|____________      
      \==|==|==|==|==|==|==|=/      
    ~~~~  ~~~~~~   ~~~~~~  ~~~~     
 ```
 
-O **Catamarã** é uma aplicação multiagente enxuta e independente da família `jangada`, construída para operar duas contas do Antigravity CLI (`agy`) em paralelo (`conta1` e `conta2`), combinadas ao `Ollama` local (`qwen3:4b`), sob confinamento estrito do kernel (`bubblewrap`) e controle determinístico de entregas por hash SHA-256.
+O **Catamarã** é uma aplicação multiagente enxuta e independente da família `jangada`, construída para orquestrar uma frota flexível de N cascos heterogêneos (Antigravity CLI com N contas isoladas, Claude Code CLI, Codex CLI e motor local Ollama). A arquitetura opera sob confinamento estrito do kernel (`bubblewrap`), controle determinístico de integridade por hash SHA-256 e interface visual inspirada nos conceitos do `ai-toolkit-web` (AI Usage Bar, AI Jail e AI Memory).
 
 ---
 
 ## 1. As 4 Camadas da Arquitetura
 
-O software divide o trabalho em quatro camadas especializadas para preservar a cota semanal do modelo mais forte (`Gemini 4 Argon`), acelerar tarefas delimitadas com `Gemini 3.8 Flash`, manter documentos sensíveis no `Ollama` local e garantir revisão independente em outra família de modelo (`Claude Opus 5.5`, com fallback automático para `Argon`):
+O software distribui a carga de trabalho em quatro camadas especializadas para preservar a cota semanal do modelo mais forte (`Gemini 4 Argon`), acelerar tarefas delimitadas com `Gemini 3.8 Flash`, manter dados sensíveis no `Ollama` local e permitir revisão independente com múltiplos provedores (`Claude`, `Codex` ou conta oposta do `Agy`):
 
 ```mermaid
 flowchart TB
-    subgraph C0["Interface e Controle (CLI cata + Central de Tarefas)"]
-        UI["Central de Tarefas e Painel de Indicadores<br>(bin/catamara-tarefas + core/painel/servidor.py)"]
-        CLI["CLI Unificado (bin/catamara e bin/cata)<br>orient | doctor | conta | isolar | delegar | validar | iniciar"]
+    subgraph C0["Interface e Controle (CLI cata + Central Desktop Qt / Web)"]
+        UI["Central de Tarefas Desktop Qt e Web<br>(bin/catamara-tarefas-qt + core/painel/central_qt.py)"]
+        CLI["CLI Unificado (bin/catamara e bin/cata)<br>orient | doctor | conta | isolar | delegar | validar | tarefas"]
     end
 
     subgraph C1["Camada 1: Coordenador (Sessão Principal)"]
@@ -33,17 +33,17 @@ flowchart TB
     end
 
     subgraph C2["Camada 2: Execução Delimitada e Especialistas Rápidos (Flash)"]
-        IMPL["Implementador Confinado (gemini-3.8-flash-high)<br>Cópia isolada sem .git, escrita só em --permitidos / --novos<br>Gera entrega.json + hashes SHA-256"]
+        IMPL["Implementador Confinado (gemini-3.8-flash-high)<br>Cópia isolada sem .git, escrita restrita a --permitidos<br>Gera entrega.json + hashes SHA-256"]
         ESP["Especialistas de Leitura (gemini-3.8-flash-high)<br>explorador | pesquisador | arquiteto | auditor | otimizador | verificador | supervisor<br>Balanceados entre Casco 1 (conta1) e Casco 2 (conta2)"]
     end
 
     subgraph C3["Camada 3: Leitura e Redação Local (Ollama)"]
-        OL["Motor Local: qwen3:4b (Avaliação de VRAM e Jogo Steam)<br>leitor (temp 0.0, faixas ARQ:INI-FIM, pdftotext, --extrair campo:tipo)<br>redator (temp 0.2) + Consolidação determinística (extracao.py)"]
+        OL["Motor Local: qwen3:4b (Avaliação de VRAM e Jogo Steam)<br>leitor (temp 0.0, faixas ARQ:INI-FIM, pdftotext, extração tipada)<br>redator (temp 0.2) + Consolidação determinística (extracao.py)"]
     end
 
-    subgraph C4["Camada 4: Validação Independente (Portão + Revisão Cruzada)"]
-        DET["1. Portão Determinístico Local (sem rede)<br>Conflitos Git, bash -n, py_compile, segredos/gitleaks e suíte de testes"]
-        REV["2. Revisor em Foto Congelada (Conta Oposta)<br>1ª opção: Claude Opus 5.5 High (piscina 3P)<br>Fallback automático quando 3P esgota: Gemini 4 Argon High"]
+    subgraph C4["Camada 4: Validação Independente (Portão Local + Revisão Flexível)"]
+        DET["1. Portão Determinístico Local (sem rede)<br>Conflitos Git, bash -n, py_compile, segredos/gitleaks e testes"]
+        REV["2. Revisor Flexível em Cascata (jangada-validar)<br>Claude Code CLI / Codex CLI / Agy conta oposta<br>Pareceres em markdown + token incremental .aprovado"]
     end
 
     UI --> CLI
@@ -53,12 +53,30 @@ flowchart TB
     COORD -->|"implementador"| IMPL
     IMPL -->|"entrega.json + SHA-256"| COORD
     COORD -->|"catamara validar"| DET
-    DET -->|"aprovado localmente"| REV
+    DET -->|"local aprovado"| REV
 ```
 
 ---
 
-## 2. Ciclo de Vida Completo de uma Tarefa
+## 2. Conceitos do AI-Toolkit-Web Incorporados
+
+Inspirado nas soluções de observabilidade e segurança do `ai-toolkit-web` (Akita on Rails), o Catamarã adota três pilares arquiteturais:
+
+1. **AI Usage Bar (Indicadores em Tempo Real):**
+   - Telemetria de cotas para toda a frota (Claude, Codex, Agy 1..N e Ollama).
+   - **Fidelidade estrita de cotas:** o Casco 2 não possui o balde semanal de Argon (`gemini-argon-wtu-weekly`). O sistema identifica essa ausência com precisão, marcando `tem_argon: false`, zerando a exibição de cota falsa e exibindo o badge visual `[Sem Argon]`.
+
+2. **AI Jail (Confinamento Estrito e Telemetria):**
+   - Isolamento via `bubblewrap` com mascaramento recíproco de credenciais (`bin/catamara-isolar`). Ao rodar tarefas do Agy, credenciais de Claude (`~/.claude`) e Codex (`~/.codex`) são ocultadas via tmpfs, além de limpar variáveis de ambiente cruzadas (`ANTHROPIC_*`, `OPENAI_*`).
+   - Telemetria de processos confinados gravada em `$CATAMARA_ESTADO/processos/` para auditoria em tempo real.
+
+3. **AI Memory e Gestão de Entregas:**
+   - Inspeção de diffs na interface Qt com realce de sintaxe em tipografia `JetBrains Mono`.
+   - Aceite atômico de alterações com conferência de hash SHA-256, garantindo que nada seja aplicado ao código sem auditoria prévia.
+
+---
+
+## 3. Ciclo de Vida Completo de uma Tarefa
 
 O diagrama abaixo mostra o percurso de uma tarefa desde a abertura da sessão até a aprovação final na validação cruzada:
 
@@ -70,10 +88,10 @@ sequenceDiagram
     participant O as Ollama Local (qwen3:4b)
     participant F as Implementador Flash (Conta 2)
     participant D as Portão Determinístico
-    participant R as Revisor Opus / Argon (Conta 2)
+    participant R as Revisor Flexível (Claude / Codex / Agy)
 
     U->>C: cata iniciar --sessao s-feature
-    C->>C: cata orient --json (lê repo, cotas C1/C2 e VRAM)
+    C->>C: cata orient --json (lê repo, cotas da frota e VRAM)
     
     alt Leitura de documentos ou extração estruturada
         C->>O: cata delegar leitor --extrair campo:tipo "Tarefa" doc.pdf
@@ -95,51 +113,53 @@ sequenceDiagram
 
     C->>D: cata validar
     D-->>C: Conflitos, sintaxe, segredos e testes OK
-    D->>R: Congela foto somente leitura e aciona Conta Oposta
-    Note over R: Usa claude-opus-5-5-high<br>(ou muda para gemini-4-argon-high se 3P < 15%)
-    R-->>U: Recibo gravado em validar.jsonl (veredito: aprovado)
+    D->>R: Congela foto somente leitura e aciona revisor escolhido
+    Note over R: Claude Code CLI -> Agy Conta Oposta -> Codex CLI<br>Veredito estrito: STATUS: APROVADO / REVISAR
+    R-->>U: Parecer gravado em pareceres/ e token .aprovado
 ```
 
 ---
 
-## 3. Isolamento Multi-Conta (`bubblewrap`) e Cascata de Modelos
+## 4. Isolamento Multi-Conta, Multi-Provedor e Frota de Cascos
 
-O `agy` tenta primeiro ler credenciais do chaveiro D-Bus (`org.freedesktop.secrets`) e, quando este não está presente, utiliza o arquivo `~/.gemini/antigravity-cli/antigravity-oauth-token` (`cliFileTokenStorage`).
-
-O `catamara-isolar` explora esse comportamento de forma determinística para impedir que uma conta sobrescreva o login da outra:
+O `catamara-isolar` impede que processos acessem tokens indevidos ou credenciais de outros provedores:
 
 ```mermaid
 flowchart LR
     subgraph Host["Estado no Host (~/.local/state/catamara)"]
         C1["contas/conta1/antigravity-cli/<br>antigravity-oauth-token"]
-        C2["contas/conta2/antigravity-cli/<br>antigravity-oauth-token"]
+        C2["contas/conta2/antigravity-cli/<br>antigravity-oauth-token (Sem Argon)"]
         COTAS["cotas/conta1.json<br>cotas/conta2.json"]
-        MARCAS["marcas/vram.json<br>marcas/jogo.json"]
+        CLAUDE_CREDS["~/.claude/"]
+        CODEX_CREDS["~/.codex/"]
     end
 
     subgraph Sandbox["Interior do Bubblewrap (catamara-isolar)"]
-        TMP_CONTAS["--tmpfs ~/.local/state/catamara/contas<br>(oculta tokens brutos das outras contas)"]
+        TMP_CONTAS["--tmpfs ~/.local/state/catamara/contas<br>(oculta tokens das outras contas)"]
+        TMP_CROSS["--tmpfs ~/.claude e ~/.codex<br>(bloqueia credenciais cruzadas)"]
         BIND_ATIVA["--bind conta_escolhida -> ~/.gemini/antigravity-cli<br>(somente a conta ativa fica visível)"]
-        DBUS["xdg-dbus-proxy filtrado<br>Permite: org.freedesktop.Notifications<br>Bloqueia: org.freedesktop.secrets"]
+        DBUS["xdg-dbus-proxy filtrado<br>Permite: Notifications<br>Bloqueia: secrets"]
     end
 
     C1 -.->|"quando --conta conta1"| BIND_ATIVA
     C2 -.->|"quando --conta conta2"| BIND_ATIVA
     TMP_CONTAS --> BIND_ATIVA
+    TMP_CROSS --> Sandbox
 ```
 
-### Regras de Seleção de Conta e Fallback de Cota (`core/contas/contas.py`)
+### Frota de Cascos e Regras de Roteamento (`core/contas/contas.py`)
 
-| Papel | Modelo Principal | Piscina de Cota Consultada | Regra de Escolha e Fallback |
+| Casco / Provedor | Identificador | Capacidades e Papéis | Política de Cota e Fallback |
 |---|---|---|---|
-| **Coordenador (`autor`)** | `gemini-4-argon-medium` / `high` | `gemini-argon-wtu-weekly`, `gemini-5h`, `gemini-weekly` | Escolhe a conta autenticada com maior saldo de Argon. |
-| **Executor / Especialistas (`executor`)** | `gemini-3.8-flash-high` | `gemini-5h`, `gemini-weekly` | Balanceia entre `conta1` e `conta2` pela maior cota Flash disponível. |
-| **Leitor / Redator (`local`)** | `qwen3:4b` (Ollama) | VRAM local (`>= 4000 MiB`) e ausência de jogo Steam | Roda localmente sob `flock` (`local.lock`); se indisponível, faz fallback para `gemini-3.8-flash-high`. |
-| **Revisor (`revisor`)** | `claude-opus-5-5-high` | `3p-5h`, `3p-weekly` | Exige a **conta oposta** à do autor (`--evitar CONTA_AUTOR`). Quando a cota `3p` do Opus cai abaixo de 15% (ou retorna limite esgotado), muda automaticamente para **`gemini-4-argon-high`**. |
+| **Agy Casco 1** | `conta1` | Coordenador (`autor`), Especialistas | Possui Argon semanal ativo (`tem_argon: true`). Usado prioritariamente para coordenação. |
+| **Agy Casco 2** | `conta2` | Executor Flash (`executor`), Especialistas | Sem Argon (`tem_argon: false`, cota 0%). Não aceita papéis de Argon. Balanceia tarefas Flash. |
+| **Claude Code** | `claude` | Revisor (`revisor`), Análise Profunda | Invoca CLI Claude oficial sob isolamento. Usado na primeira linha de revisão independente. |
+| **Codex CLI** | `codex` | Revisor alternativo, Implementador | CLI de apoio em cascata para tarefas de código e validação secundária. |
+| **Ollama Local** | `local` | Leitor (`leitor`), Redator (`redator`) | Modelo `qwen3:4b`. Exige VRAM >= 4000 MiB e ausência de jogos Steam. Trava via `flock`. |
 
 ---
 
-## 4. Estrutura do Repositório
+## 5. Estrutura do Repositório
 
 ```text
 catamara/
@@ -147,14 +167,15 @@ catamara/
 │   ├── catamara               CLI principal unificado
 │   ├── cata                   Atalho curto para bin/catamara
 │   ├── catamara-config        Variáveis XDG, modelos padrão, travas flock e git seguro
-│   ├── catamara-isolar        Sandbox bubblewrap multi-conta sem org.freedesktop.secrets
+│   ├── catamara-isolar        Sandbox bubblewrap com isolamento multi-provedor e telemetria
 │   ├── catamara-delegar       Roteador para Ollama local, especialistas Flash e implementador
-│   ├── catamara-validar       Portão determinístico offline + revisor na conta oposta
+│   ├── catamara-validar       Validador flexível estilo jangada-validar (Claude, Codex, Agy)
 │   ├── catamara-hook-leitor   Filtro PreToolUse estrito para comandos de leitura
-│   └── catamara-tarefas       Central de Tarefas e Painel de Indicadores (TUI, Web e Waybar)
+│   ├── catamara-tarefas       Central de Tarefas CLI, TUI, Web e Waybar
+│   └── catamara-tarefas-qt    Central Desktop nativa PyQt6 com AI Usage Bar e AI Memory
 ├── core/
 │   ├── contas/
-│   │   └── contas.py          Gerenciador multi-conta, trustedWorkspaces, cotas /usage e fallback
+│   │   └── contas.py          Frota N-cascos, catálogo, fidelidade Argon e fallback
 │   ├── delegacao/
 │   │   ├── avaliar_ollama.py  Checagem de VRAM/Steam e execução local no qwen3:4b
 │   │   ├── extracao.py        Esquema tipado e consolidação determinística de fatias
@@ -165,51 +186,61 @@ catamara/
 │   │   ├── deterministico.py  Verificador offline de conflitos, sintaxe, segredos e testes
 │   │   └── sessoes.py         Ciclo de vida de sessões tmux -L catamara e git worktree
 │   ├── painel/
-│   │   ├── servidor.py        API HTTP local (127.0.0.1) e coletor de estado e indicadores
-│   │   └── central.html       Interface visual com a identidade oficial da Jangada
+│   │   ├── servidor.py        API HTTP local (127.0.0.1) e coletor de estado da frota
+│   │   ├── central.html       Interface Web oficial unificada com identidade Jangada
+│   │   ├── central_qt.py      Container Desktop nativo PyQt6 (QWebEngineView + fallback)
+│   │   └── catamara-symbolic.svg  Logotipo oficial preservado
 │   └── agentes/
 │       └── agy/
 │           ├── agents/        11 especialistas (.md): explorador, leitor, pesquisador, arquiteto,
 │           │                  auditor, otimizador, redator, verificador, supervisor, implementador, revisor
 │           └── hooks.json     Configuração do filtro PreToolUse
 └── testes/
-    └── verificar.sh           Suíte determinística completa (Fases 1, 2, 3 e Painel)
+    └── verificar.sh           Suíte determinística completa com checagem de regras e integridade
 ```
 
 ---
 
-## 5. Comandos Principais
+## 6. Comandos Principais
 
 ```bash
-# 1. Inicializar as duas contas (importando a credencial atual para conta1) e autenticar conta2
+# 1. Listar catálogo da frota de cascos e status de contas
+./bin/cata conta cascos
+./bin/cata conta status
+
+# 2. Inicializar contas Agy e efetuar login do Casco 2
 ./bin/cata conta init --importar-atual
 ./bin/cata conta login conta2
 
-# 2. Verificar saúde do ambiente e orientação contextual
+# 3. Diagnóstico de integridade e orientação da sessão
 ./bin/cata doctor
 ./bin/cata orient
 
-# 3. Abrir a Central de Tarefas e o Painel de Indicadores (no terminal ou no navegador)
-./bin/cata tarefas --status
-./bin/cata tarefas --indicadores
-./bin/cata tarefas --web
+# 4. Central de Tarefas Unificada (Desktop PyQt6, Navegador Web e Terminal TUI)
+./bin/cata tarefas --qt       # Janela desktop nativa unificada (QWebEngineView com central.html)
+./bin/cata tarefas-qt         # Atalho direto para a janela desktop
+./bin/cata tarefas --web      # Abre a interface gráfica diretamente no navegador padrão
+./bin/cata tarefas --status   # Modo TUI renderizado em ASCII art no terminal
+./bin/cata tarefas --qt --nativa  # Modo legado com widgets nativos QWidget (sem WebEngine)
 
-# 4. Delegar leitura local (Ollama qwen3:4b) ou especialistas rápidos (Flash High)
-./bin/cata delegar leitor --extrair autor:texto --extrair ano:int "Extrair referências" artigo.pdf
-./bin/cata delegar arquiteto "Avaliar acoplamento entre módulos" core/
+# 5. Delegar leitura local (Ollama) ou análise por especialistas
+./bin/cata delegar leitor --extrair autor:texto "Extrair metadados" artigo.pdf
+./bin/cata delegar arquiteto "Avaliar acoplamento de módulos" core/
 
-# 5. Executar implementação delimitada (Flash High) e aprovar por hash SHA-256
+# 6. Implementação confinada e aceite por hash SHA-256
 ./bin/cata delegar implementador \
   --base "$(git rev-parse HEAD)" \
-  --arquivos core/orquestracao/orient.py \
-  --permitidos core/orquestracao/orient.py \
-  --criterio "python3 -m py_compile core/orquestracao/orient.py" \
-  "Adicionar campo de tempo de execução no resumo"
+  --arquivos core/contas/contas.py \
+  --permitidos core/contas/contas.py \
+  --criterio "python3 -m py_compile core/contas/contas.py" \
+  "Adicionar catálogo da frota de cascos"
 ./bin/cata delegar implementador --aceitar <ID> --entrega <HASH>
 
-# 6. Validar entrega (portão determinístico + revisor Opus/Argon na conta oposta)
-./bin/cata validar
+# 7. Validação flexível estilo jangada-validar
+./bin/cata validar --revisor claude
+./bin/cata validar --revisor oposto
+./bin/cata validar --so-deterministico
 
-# 7. Rodar a suíte completa de verificação
+# 8. Executar suíte de testes do projeto
 ./testes/verificar.sh
 ```

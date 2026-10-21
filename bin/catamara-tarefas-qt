@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Abre a Central de Tarefas do Catamara em interface desktop PyQt6.
+# Se ja houver uma instancia aberta, foca a janela existente via soquete UNIX.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/catamara-config"
+
+exec python3 "$CATAMARA_CORE_PY/painel/central_qt.py" "$@"

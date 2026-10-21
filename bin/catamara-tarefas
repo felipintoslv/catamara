@@ -487,6 +487,8 @@ def gerar_waybar_json(estado: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Central de Tarefas e Painel Operacional do Catamara")
     parser.add_argument("--tui", "--status", dest="tui", action="store_true", help="Renderiza a Central de Tarefas no terminal (padrao)")
+    parser.add_argument("--qt", "--desktop", dest="qt", action="store_true", help="Abre a Central de Tarefas em interface desktop nativa (PyQt6)")
+    parser.add_argument("--nativa", "--widgets", dest="nativa", action="store_true", help="Usa interface de widgets nativos QWidget no modo Qt")
     parser.add_argument("--demo", action="store_true", help="Usa dados de demonstracao para exibicao rica")
     parser.add_argument("--indicadores", action="store_true", help="Exibe o painel de indicadores com metricas analiticas")
     parser.add_argument("--waybar", action="store_true", help="Emite saida JSON formatada para modulo da Waybar")
@@ -494,6 +496,13 @@ def main() -> int:
     parser.add_argument("--web", "--servidor", dest="web", action="store_true", help="Inicia o servidor e abre a central grafica no navegador")
     parser.add_argument("--porta", type=int, default=int(os.environ.get("CATAMARA_PAINEL_PORTA", 8770)), help="Porta TCP do servidor (padrao: 8770)")
     args = parser.parse_args()
+
+    if args.qt:
+        script_qt = RAIZ_CATAMARA / "core" / "painel" / "central_qt.py"
+        cmd = [sys.executable, str(script_qt), "--porta", str(args.porta)]
+        if args.nativa:
+            cmd.append("--nativa")
+        os.execv(sys.executable, cmd)
 
     if args.web:
         porta = args.porta
@@ -506,6 +515,16 @@ def main() -> int:
         print(f"Abrindo Central de Tarefas em {url}...")
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 0
+
+    # Se nao foi solicitado modo TUI explicito e ha sessao grafica ativa, padroniza abertura no desktop Qt
+    ambiente_grafico = bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
+    if not args.tui and not args.demo and not args.waybar and not args.json and not args.indicadores and ambiente_grafico:
+        script_qt = RAIZ_CATAMARA / "core" / "painel" / "central_qt.py"
+        if script_qt.is_file():
+            cmd = [sys.executable, str(script_qt), "--porta", str(args.porta)]
+            if args.nativa:
+                cmd.append("--nativa")
+            os.execv(sys.executable, cmd)
 
     if args.demo:
         estado = obter_dados_demo()
