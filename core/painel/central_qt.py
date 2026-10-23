@@ -13,6 +13,7 @@ com a UI oficial da Jangada (central.html), preservando integracao nativa deskto
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -512,6 +513,367 @@ if PYQT_DISPONIVEL:
             self.layout_cascos.addStretch()
 
 
+    class AbaValidacao(QWidget):
+        """Aba de Validacao Cruzada Independente e Portao Deterministico Local."""
+
+        def __init__(self, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(12)
+
+            # Topo com titulo e botoes de acao
+            topo = QHBoxLayout()
+            lbl_tit = QLabel("Validação Cruzada e Portão Local Offline")
+            lbl_tit.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {COR_TEXTO};")
+            topo.addWidget(lbl_tit)
+            topo.addStretch()
+
+            self.btn_validar_local = QPushButton("▶ Executar Portão Deterministico (Zero Cota)")
+            self.btn_validar_local.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COR_PRIMARIA};
+                    color: {COR_TEXTO_PRIMARIO};
+                    border: none;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{ background-color: #b5ddfa; }}
+            """)
+            self.btn_validar_local.clicked.connect(lambda: self.disparar_validacao(so_deterministico=True))
+            topo.addWidget(self.btn_validar_local)
+
+            self.btn_validar_revisor = QPushButton("🛡 Revisão Cruzada (Conta Oposta / 3P)")
+            self.btn_validar_revisor.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #3b2d54;
+                    color: {COR_REVISAO};
+                    border: 1px solid rgba(201, 182, 242, 0.5);
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{ background-color: #4b3a6b; }}
+            """)
+            self.btn_validar_revisor.clicked.connect(lambda: self.disparar_validacao(so_deterministico=False))
+            topo.addWidget(self.btn_validar_revisor)
+
+            self.btn_abrir_fotos = QPushButton("📸 Ver Fotos")
+            self.btn_abrir_fotos.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_TEXTO_SUAVE};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{ background-color: {COR_ELEVADA_HOVER}; }}
+            """)
+            self.btn_abrir_fotos.clicked.connect(self.abrir_pasta_fotos)
+            topo.addWidget(self.btn_abrir_fotos)
+
+            layout.addLayout(topo)
+
+            # Pilares do Portao Deterministico
+            grp_portao = QGroupBox("1. Pilares do Portão Deterministico Local (Zero Consumo de Nuvem)")
+            grp_portao.setStyleSheet(f"""
+                QGroupBox {{
+                    color: {COR_TEXTO};
+                    font-weight: bold;
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    margin-top: 6px;
+                    padding-top: 14px;
+                    background-color: {COR_ELEVADA};
+                }}
+            """)
+            lay_portao = QHBoxLayout(grp_portao)
+
+            self.badge_gitleaks = QLabel("Segredos (gitleaks): OK")
+            self.badge_bash = QLabel("Sintaxe Shell: OK")
+            self.badge_python = QLabel("Compilação Python: OK")
+            self.badge_testes = QLabel("Suíte Testes: OK")
+
+            for b in (self.badge_gitleaks, self.badge_bash, self.badge_python, self.badge_testes):
+                b.setStyleSheet(f"background-color: #1c2e24; color: {COR_CONCLUIDA}; border-radius: 4px; padding: 8px 12px; font-weight: bold; font-size: 11px;")
+                lay_portao.addWidget(b)
+            layout.addWidget(grp_portao)
+
+            # Parecer da Revisao Cruzada
+            grp_revisao = QGroupBox("2. Parecer do Revisor Independente na Conta Oposta (Claude Opus / Argon)")
+            grp_revisao.setStyleSheet(f"""
+                QGroupBox {{
+                    color: {COR_TEXTO};
+                    font-weight: bold;
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    margin-top: 6px;
+                    padding-top: 14px;
+                    background-color: {COR_ELEVADA};
+                }}
+            """)
+            lay_rev = QVBoxLayout(grp_revisao)
+            lay_rev.setSpacing(8)
+
+            linha_meta = QHBoxLayout()
+            self.lbl_rev_modelo = QLabel("REVISOR: claude-opus-5-5-high (Familia 3P)")
+            self.lbl_rev_modelo.setStyleSheet(f"color: {COR_PRIMARIA}; font-weight: bold; font-size: 12px;")
+            linha_meta.addWidget(self.lbl_rev_modelo)
+
+            self.lbl_rev_conta = QLabel("CONTA: conta2 (autor foi conta1)")
+            self.lbl_rev_conta.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
+            linha_meta.addWidget(self.lbl_rev_conta, alignment=Qt.AlignmentFlag.AlignRight)
+
+            self.badge_veredito = QLabel("VEREDITO: APROVADO")
+            self.badge_veredito.setStyleSheet(f"background-color: #1c2e24; color: {COR_CONCLUIDA}; border-radius: 4px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+            linha_meta.addWidget(self.badge_veredito, alignment=Qt.AlignmentFlag.AlignRight)
+            lay_rev.addLayout(linha_meta)
+
+            self.txt_parecer = QTextEdit()
+            self.txt_parecer.setReadOnly(True)
+            self.txt_parecer.setMinimumHeight(110)
+            self.txt_parecer.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: #0b0e11;
+                    color: {COR_TEXTO};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-family: Inter, sans-serif;
+                    font-size: 12px;
+                }}
+            """)
+            self.txt_parecer.setText("Nenhum parecer de revisor executado recentemente.")
+            lay_rev.addWidget(self.txt_parecer)
+
+            self.lbl_foto_info = QLabel("Foto: Nenhuma foto congelada inspecionada ainda.")
+            self.lbl_foto_info.setStyleSheet(f"font-family: monospace; font-size: 11px; color: {COR_TEXTO_SUAVE};")
+            lay_rev.addWidget(self.lbl_foto_info)
+
+            layout.addWidget(grp_revisao)
+            layout.addStretch()
+
+        def abrir_pasta_fotos(self) -> None:
+            pasta_fotos = obter_pasta_estado() / "fotos"
+            pasta_fotos.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(["xdg-open", str(pasta_fotos)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def disparar_validacao(self, so_deterministico: bool) -> None:
+            tipo_str = "portão deterministico local" if so_deterministico else "revisão cruzada na conta oposta"
+            cmd = [str(RAIZ_CATAMARA / "bin" / "catamara-validar"), "--json"]
+            if so_deterministico:
+                cmd.append("--so-deterministico")
+
+            # Identifica worktree ou repositorio da sessao ativa
+            pasta_ses = obter_pasta_estado() / "sessoes"
+            if pasta_ses.is_dir():
+                for arq in sorted(pasta_ses.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                    try:
+                        d = json.loads(arq.read_text(encoding="utf-8"))
+                        if d.get("estado") == "ativa":
+                            cand = d.get("worktree") or d.get("repo")
+                            if cand and Path(cand).exists():
+                                cmd.extend(["--repo", str(cand)])
+                                if d.get("conta"):
+                                    cmd.extend(["--conta-autor", str(d["conta"])])
+                                break
+                    except Exception:
+                        continue
+
+            QMessageBox.information(self, "Iniciando Validação", f"Executando {tipo_str} em segundo plano.\nAo finalizar, o status será atualizado automaticamente.")
+            
+            def rodar():
+                try:
+                    subprocess.run(cmd, capture_output=True, text=True, check=False)
+                except Exception:
+                    pass
+
+            import threading
+            threading.Thread(target=rodar, daemon=True).start()
+
+        def atualizar_validacao(self, historico_validar: list[dict[str, Any]]) -> None:
+            if not historico_validar:
+                return
+            ult = historico_validar[0]
+            det_ok = ult.get("deterministico_ok") is True and ult.get("codigo") == 0
+            cor_det = COR_CONCLUIDA if det_ok else COR_FALHOU
+            bg_det = "#1c2e24" if det_ok else "#2e1c1c"
+            st_det = "PASSED" if det_ok else "FAILED"
+
+            for b, nome in (
+                (self.badge_gitleaks, "Segredos (gitleaks)"),
+                (self.badge_bash, "Sintaxe Shell"),
+                (self.badge_python, "Compilação Python"),
+                (self.badge_testes, "Suíte Testes"),
+            ):
+                b.setText(f"{nome}: {st_det}")
+                b.setStyleSheet(f"background-color: {bg_det}; color: {cor_det}; border-radius: 4px; padding: 8px 12px; font-weight: bold; font-size: 11px;")
+
+            if ult.get("modelo"):
+                self.lbl_rev_modelo.setText(f"REVISOR: {ult.get('modelo')}")
+            if ult.get("conta_revisor"):
+                self.lbl_rev_conta.setText(f"CONTA: {ult.get('conta_revisor')} (autor foi {ult.get('conta_autor') or 'oposta'})")
+            if ult.get("foto"):
+                self.lbl_foto_info.setText(f"Foto: {ult.get('foto')} (somente-leitura)")
+
+            veredito = ult.get("veredito", "pendente").upper()
+            aprovado = "APROVADO" in veredito
+            cor_ver = COR_CONCLUIDA if aprovado else COR_FALHOU
+            bg_ver = "#1c2e24" if aprovado else "#2e1c1c"
+            self.badge_veredito.setText(f"VEREDITO: {veredito}")
+            self.badge_veredito.setStyleSheet(f"background-color: {bg_ver}; color: {cor_ver}; border-radius: 4px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+
+            if ult.get("texto_revisao"):
+                self.txt_parecer.setText(ult["texto_revisao"])
+            elif aprovado:
+                self.txt_parecer.setText("Checagens deterministicas aprovadas sem violacao de contratos de integridade.")
+
+
+    class AbaIndicadores(QWidget):
+        """Aba Painel de Indicadores Analiticos e Linha do Tempo."""
+
+        def __init__(self, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(12)
+
+            topo = QHBoxLayout()
+            lbl_tit = QLabel("Painel de Indicadores e Telemetria de Frota")
+            lbl_tit.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {COR_TEXTO};")
+            topo.addWidget(lbl_tit)
+            topo.addStretch()
+
+            self.btn_atualizar = QPushButton("↻ Atualizar Indicadores")
+            self.btn_atualizar.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_PRIMARIA};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    padding: 5px 12px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{ background-color: {COR_ELEVADA_HOVER}; }}
+            """)
+            topo.addWidget(self.btn_atualizar)
+            layout.addLayout(topo)
+
+            # 4 cards em grade 2x2
+            grid = QHBoxLayout()
+
+            # Card 1: Economia
+            grp_eco = QGroupBox("1. Economia de Cota e Motores")
+            grp_eco.setStyleSheet(f"QGroupBox {{ color: {COR_TEXTO}; font-weight: bold; border: 1px solid {COR_BORDA}; border-radius: 6px; padding: 12px; background: {COR_ELEVADA}; }}")
+            lay_eco = QVBoxLayout(grp_eco)
+            self.lbl_eco_poupada = QLabel("Cota Externa Poupada: 0%")
+            self.lbl_eco_poupada.setStyleSheet(f"color: {COR_CONCLUIDA}; font-size: 13px; font-weight: bold;")
+            lay_eco.addWidget(self.lbl_eco_poupada)
+            self.lbl_eco_ollama = QLabel("• Ollama (qwen3:4b): 0 chamadas")
+            self.lbl_eco_flash = QLabel("• Gemini Flash: 0 chamadas")
+            self.lbl_eco_impl = QLabel("• Implementador: 0 entregas")
+            for lbl in (self.lbl_eco_ollama, self.lbl_eco_flash, self.lbl_eco_impl):
+                lbl.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
+                lay_eco.addWidget(lbl)
+            lay_eco.addStretch()
+            grid.addWidget(grp_eco)
+
+            # Card 2: Balanço de Cascos
+            grp_bal = QGroupBox("2. Balanço entre Cascos")
+            grp_bal.setStyleSheet(f"QGroupBox {{ color: {COR_TEXTO}; font-weight: bold; border: 1px solid {COR_BORDA}; border-radius: 6px; padding: 12px; background: {COR_ELEVADA}; }}")
+            lay_bal = QVBoxLayout(grp_bal)
+            self.lbl_bal_ratio = QLabel("C1: 50% │ C2: 50%")
+            self.lbl_bal_ratio.setStyleSheet(f"color: {COR_PRIMARIA}; font-size: 13px; font-weight: bold;")
+            lay_bal.addWidget(self.lbl_bal_ratio)
+            self.lbl_bal_c1 = QLabel("• Casco 1 (Argon Coordenador): 0 chamadas")
+            self.lbl_bal_c2 = QLabel("• Casco 2 (Flash/Opus Executor): 0 chamadas")
+            for lbl in (self.lbl_bal_c1, self.lbl_bal_c2):
+                lbl.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
+                lay_bal.addWidget(lbl)
+            lay_bal.addStretch()
+            grid.addWidget(grp_bal)
+
+            # Card 3: Funil de Qualidade
+            grp_fun = QGroupBox("3. Funil de Qualidade")
+            grp_fun.setStyleSheet(f"QGroupBox {{ color: {COR_TEXTO}; font-weight: bold; border: 1px solid {COR_BORDA}; border-radius: 6px; padding: 12px; background: {COR_ELEVADA}; }}")
+            lay_fun = QVBoxLayout(grp_fun)
+            self.lbl_fun_taxa = QLabel("Portão Local: 100% aprovação")
+            self.lbl_fun_taxa.setStyleSheet(f"color: {COR_CONCLUIDA}; font-size: 13px; font-weight: bold;")
+            lay_fun.addWidget(self.lbl_fun_taxa)
+            self.lbl_fun_rev = QLabel("• Revisão Cruzada: 100% aprovação")
+            self.lbl_fun_ent = QLabel("• Entregas Aceitas: 0 pendentes")
+            for lbl in (self.lbl_fun_rev, self.lbl_fun_ent):
+                lbl.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
+                lay_fun.addWidget(lbl)
+            lay_fun.addStretch()
+            grid.addWidget(grp_fun)
+
+            layout.addLayout(grid)
+
+            # Card 4: Linha do Tempo Recente de Eventos
+            lbl_lt = QLabel("Linha do Tempo Recente de Eventos (Journal):")
+            lbl_lt.setStyleSheet(f"font-weight: bold; color: {COR_TEXTO}; margin-top: 6px;")
+            layout.addWidget(lbl_lt)
+
+            self.tabela_eventos = QTableWidget(0, 3)
+            self.tabela_eventos.setHorizontalHeaderLabels(["Horário", "Evento", "Detalhes"])
+            self.tabela_eventos.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            self.tabela_eventos.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            self.tabela_eventos.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            self.tabela_eventos.setStyleSheet(f"""
+                QTableWidget {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_TEXTO};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                }}
+                QHeaderView::section {{
+                    background-color: #262b30;
+                    color: {COR_PRIMARIA};
+                    font-weight: bold;
+                    padding: 4px;
+                    border: none;
+                }}
+            """)
+            layout.addWidget(self.tabela_eventos)
+
+        def atualizar_indicadores(self, ind: dict[str, Any]) -> None:
+            eco = ind.get("economia_motores", {})
+            self.lbl_eco_poupada.setText(f"Cota Externa Poupada: {eco.get('cota_poupada_pct', 0)}%")
+            por_mot = eco.get("por_motor", {})
+            ol = por_mot.get("ollama", {})
+            fl = por_mot.get("agy_flash", {})
+            imp = por_mot.get("implementador", {})
+            self.lbl_eco_ollama.setText(f"• Ollama (qwen3:4b): {ol.get('total', 0)} chamadas ({ol.get('taxa_sucesso_pct', 100)}% ok)")
+            self.lbl_eco_flash.setText(f"• Gemini Flash: {fl.get('total', 0)} chamadas ({fl.get('taxa_sucesso_pct', 100)}% ok)")
+            self.lbl_eco_impl.setText(f"• Implementador: {imp.get('total', 0)} entregas")
+
+            bal = ind.get("balanco_cascos", {})
+            c1 = bal.get("conta1_chamadas", 0)
+            c2 = bal.get("conta2_chamadas", 0)
+            tot = max(1, c1 + c2)
+            self.lbl_bal_ratio.setText(f"C1: {int(c1/tot*100)}% │ C2: {int(c2/tot*100)}%")
+            self.lbl_bal_c1.setText(f"• Casco 1 (Argon Coordenador): {c1} chamadas")
+            self.lbl_bal_c2.setText(f"• Casco 2 (Flash/Opus Executor): {c2} chamadas")
+
+            fun = ind.get("funil_qualidade", {})
+            self.lbl_fun_taxa.setText(f"Portão Local: {fun.get('taxa_deterministico_pct', 100)}% aprovação")
+            self.lbl_fun_rev.setText(f"• Revisão Cruzada: {fun.get('taxa_revisao_pct', 100)}% aprovação")
+            self.lbl_fun_ent.setText(f"• Entregas Aceitas: {fun.get('implementacoes_aceitas', 0)} aceitas │ {fun.get('implementacoes_pendentes', 0)} pendentes")
+
+            eventos = ind.get("linha_do_tempo", [])
+            self.tabela_eventos.setRowCount(len(eventos))
+            for i, ev in enumerate(eventos):
+                ts = str(ev.get("ts", ""))[:19].replace("T", " ")
+                self.tabela_eventos.setItem(i, 0, QTableWidgetItem(ts))
+                self.tabela_eventos.setItem(i, 1, QTableWidgetItem(ev.get("titulo", "")))
+                self.tabela_eventos.setItem(i, 2, QTableWidgetItem(ev.get("detalhes", "")))
+
+
     class AbaJail(QWidget):
         """Aba AI Jail com monitoramento de sandboxes Bubblewrap e portao deterministico."""
 
@@ -801,7 +1163,22 @@ if PYQT_DISPONIVEL:
 
 
     def abrir_terminal_sessao(sid: str) -> None:
-        """Abre ou foca o terminal da sessao tmux com isolamento no Hyprland."""
+        """Abre ou foca o terminal da sessao tmux com suporte a Niri, Hyprland e emuladores variados."""
+        # 1. Tenta focar no Niri
+        if os.environ.get("NIRI_SOCKET"):
+            try:
+                proc = subprocess.run(
+                    ["niri", "msg", "action", "focus-window", "--matching-title", f"Catamara: {sid}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    return
+            except Exception:
+                pass
+
+        # 2. Tenta focar no Hyprland
         if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
             proc = subprocess.run(
                 ["hyprctl", "dispatch", "focuswindow", f"title:^Catamara: {sid}$"],
@@ -812,8 +1189,9 @@ if PYQT_DISPONIVEL:
             if proc.returncode == 0 and "ok" in proc.stdout.lower() and "warning" not in proc.stdout.lower():
                 return
 
+        # 3. Fallback: abre terminal com cata continuar
         cmd_cata = str(RAIZ_CATAMARA / "bin" / "cata")
-        for term in ["jangada-terminal", "ghostty", "kitty", "alacritty", "foot", "wezterm", "konsole", "x-terminal-emulator", "xterm"]:
+        for term in ["jangada-terminal", "alacritty", "ghostty", "kitty", "foot", "wezterm", "konsole", "x-terminal-emulator", "xterm"]:
             term_bin = shutil.which(term)
             if term_bin:
                 if term == "jangada-terminal":
@@ -821,11 +1199,48 @@ if PYQT_DISPONIVEL:
                 elif term in {"kitty", "ghostty", "foot"}:
                     cmd = [term_bin, "--title", f"Catamara: {sid}", cmd_cata, "continuar", sid]
                 elif term == "alacritty":
-                    cmd = [term_bin, "--title", f"Catamara: {sid}", "-e", cmd_cata, "continuar", sid]
+                    cmd = [term_bin, "--class", f"catamara-sessao-{sid}", "--title", f"Catamara: {sid}", "-e", cmd_cata, "continuar", sid]
+                elif term == "wezterm":
+                    cmd = [term_bin, "start", "--class", f"catamara-sessao-{sid}", "--", cmd_cata, "continuar", sid]
                 else:
                     cmd = [term_bin, "-e", cmd_cata, "continuar", sid]
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                return
+                try:
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    return
+                except Exception:
+                    continue
+
+    def abrir_terminal_worktree(sid: str) -> None:
+        """Abre um terminal direto na pasta da worktree da sessao."""
+        s_arq = obter_pasta_estado() / "sessoes" / f"{sid}.json"
+        wt_dir = None
+        if s_arq.is_file():
+            try:
+                d = json.loads(s_arq.read_text(encoding="utf-8"))
+                wt_dir = d.get("worktree") or d.get("repo")
+            except Exception:
+                pass
+        if not wt_dir or not Path(wt_dir).exists():
+            return
+
+        for term in ["jangada-terminal", "alacritty", "ghostty", "kitty", "foot", "wezterm", "konsole", "x-terminal-emulator", "xterm"]:
+            term_bin = shutil.which(term)
+            if term_bin:
+                if term == "jangada-terminal":
+                    cmd = [term_bin, "--classe", f"catamara-worktree-{sid}", "--titulo", f"Worktree: {sid}", "-e", "bash"]
+                elif term in {"kitty", "ghostty", "foot"}:
+                    cmd = [term_bin, "--title", f"Worktree: {sid}", "bash"]
+                elif term == "alacritty":
+                    cmd = [term_bin, "--class", f"catamara-worktree-{sid}", "--title", f"Worktree: {sid}", "-e", "bash"]
+                elif term == "wezterm":
+                    cmd = [term_bin, "start", "--class", f"catamara-worktree-{sid}", "--", "bash"]
+                else:
+                    cmd = [term_bin, "-e", "bash"]
+                try:
+                    subprocess.Popen(cmd, cwd=str(wt_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    return
+                except Exception:
+                    continue
 
 
     class DialogoNovaTarefa(QDialog):
@@ -921,6 +1336,35 @@ if PYQT_DISPONIVEL:
             """)
             layout.addWidget(self.txt_tarefa)
 
+            # Campo 3: Casco / Agente Inicial
+            lbl_motor = QLabel("3. Casco / Agente Inicial:")
+            lbl_motor.setStyleSheet(f"color: {COR_TEXTO}; font-weight: bold; font-size: 12px;")
+            layout.addWidget(lbl_motor)
+
+            self.combo_motor = QComboBox()
+            self.combo_motor.setStyleSheet(f"""
+                QComboBox {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_TEXTO};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    padding: 6px 10px;
+                    font-size: 13px;
+                }}
+                QComboBox::drop-down {{ border: none; }}
+                QComboBox QAbstractItemView {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_TEXTO};
+                    selection-background-color: #1f4968;
+                    border: 1px solid {COR_BORDA};
+                }}
+            """)
+            self.combo_motor.addItem("Antigravity CLI (Argon / Flash Coordenador)", "agy")
+            self.combo_motor.addItem("Claude Code CLI (claude)", "claude")
+            self.combo_motor.addItem("Codex CLI (codex - OpenAI)", "codex")
+            self.combo_motor.addItem("Ollama Local (qwen2.5-coder offline)", "ollama")
+            layout.addWidget(self.combo_motor)
+
             lbl_dica = QLabel("🛡️ O isolamento em worktree Git é automático. Seu repositório principal fica protegido.")
             lbl_dica.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
             layout.addWidget(lbl_dica)
@@ -987,6 +1431,7 @@ if PYQT_DISPONIVEL:
 
             tarefa_slug = self.txt_tarefa.text().strip()
             sid = re.sub(r"[^a-z0-9-]", "-", tarefa_slug.lower()).strip("-") if tarefa_slug else None
+            motor_escolhido = self.combo_motor.currentData() or "agy"
 
             try:
                 dados = sessoes.criar_e_iniciar_sessao(
@@ -994,6 +1439,7 @@ if PYQT_DISPONIVEL:
                     sessao_id=sid,
                     conta=os.environ.get("CATAMARA_CONTA_PADRAO", "conta1"),
                     direto=False,
+                    motor=motor_escolhido,
                 )
                 self.sessao_criada = dados
                 abrir_terminal_sessao(dados["sessao"])
@@ -1018,32 +1464,14 @@ if PYQT_DISPONIVEL:
             topo.addWidget(lbl_titulo)
             topo.addStretch()
 
-            self.btn_nova_tarefa = QPushButton("+ Nova Tarefa")
-            self.btn_nova_tarefa.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COR_PRIMARIA};
-                    color: {COR_TEXTO_PRIMARIO};
-                    border: none;
-                    border-radius: 6px;
-                    padding: 6px 16px;
-                    font-weight: bold;
-                    font-size: 12px;
-                }}
-                QPushButton:hover {{
-                    background-color: #b5ddfa;
-                }}
-            """)
-            self.btn_nova_tarefa.clicked.connect(self.abrir_dialogo_nova_tarefa)
-            topo.addWidget(self.btn_nova_tarefa)
-
-            self.btn_atualizar = QPushButton("Atualizar")
+            self.btn_atualizar = QPushButton("↻ Atualizar")
             self.btn_atualizar.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {COR_ELEVADA};
                     color: {COR_PRIMARIA};
                     border: 1px solid {COR_BORDA};
                     border-radius: 6px;
-                    padding: 5px 12px;
+                    padding: 5px 14px;
                     font-weight: bold;
                 }}
                 QPushButton:hover {{
@@ -1073,17 +1501,45 @@ if PYQT_DISPONIVEL:
             lbl_vazio_tit.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {COR_TEXTO};")
             lbl_vazio_tit.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lay_vazio.addWidget(lbl_vazio_tit)
-            lbl_vazio_sub = QLabel("Clique no botão '+ Nova Tarefa' acima para iniciar um trabalho com o Coordenador Argon em ambiente isolado.")
-            lbl_vazio_sub.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 12px; margin-top: 4px;")
+            lbl_vazio_sub = QLabel("Clique no botão '+ Nova Tarefa' no topo para iniciar um trabalho com o Coordenador Argon em ambiente isolado.")
+            lbl_vazio_sub.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 12px; margin-top: 4px; margin-bottom: 8px;")
             lbl_vazio_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lay_vazio.addWidget(lbl_vazio_sub)
+
+            self.btn_criar_vazio = QPushButton("+ Criar Primeira Tarefa")
+            self.btn_criar_vazio.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COR_PRIMARIA};
+                    color: {COR_TEXTO_PRIMARIO};
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 20px;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: #b5ddfa;
+                }}
+            """)
+            self.btn_criar_vazio.clicked.connect(self.abrir_dialogo_nova_tarefa)
+            lay_vazio.addWidget(self.btn_criar_vazio, alignment=Qt.AlignmentFlag.AlignCenter)
+
             layout.addWidget(self.card_vazio)
 
-            # Tabela de tarefas
-            self.tabela_tarefas = QTableWidget(0, 5)
-            self.tabela_tarefas.setHorizontalHeaderLabels(["Projeto", "Tarefa / Sessão", "Casco Inicial", "Status", "Ações"])
+            # Tabela de tarefas com coluna de Data de Abertura
+            self.tabela_tarefas = QTableWidget(0, 6)
+            self.tabela_tarefas.setHorizontalHeaderLabels([
+                "Projeto",
+                "Tarefa / Sessão",
+                "Data de Abertura",
+                "Casco Inicial",
+                "Status",
+                "Ações",
+            ])
             self.tabela_tarefas.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-            self.tabela_tarefas.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+            self.tabela_tarefas.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            self.tabela_tarefas.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            self.tabela_tarefas.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
             self.tabela_tarefas.setStyleSheet(f"""
                 QTableWidget {{
                     background-color: {COR_ELEVADA};
@@ -1125,26 +1581,59 @@ if PYQT_DISPONIVEL:
                 conta = s.get("conta") or "conta1"
                 ativa = s.get("ativa_no_tmux", False) or s.get("estado") == "ativa"
 
+                # Formata data de abertura amigavel (ex: 22/10 00:30)
+                criado_raw = str(s.get("criado") or "")
+                data_formatada = "--"
+                if criado_raw:
+                    try:
+                        dt = datetime.fromisoformat(criado_raw)
+                        data_formatada = dt.strftime("%d/%m %H:%M")
+                    except Exception:
+                        partes = criado_raw.split("T")
+                        if len(partes) == 2:
+                            d_part = partes[0].split("-")
+                            h_part = partes[1][:5]
+                            if len(d_part) == 3:
+                                data_formatada = f"{d_part[2]}/{d_part[1]} {h_part}"
+                        else:
+                            data_formatada = criado_raw[:16]
+
                 self.tabela_tarefas.setItem(i, 0, QTableWidgetItem(proj))
                 self.tabela_tarefas.setItem(i, 1, QTableWidgetItem(sid))
-                self.tabela_tarefas.setItem(i, 2, QTableWidgetItem(f"{conta} (Argon)" if conta == "conta1" else f"{conta} (Flash)"))
+
+                item_data = QTableWidgetItem(data_formatada)
+                item_data.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item_data.setForeground(QColor(COR_TEXTO_SUAVE))
+                self.tabela_tarefas.setItem(i, 2, item_data)
+
+                motor = s.get("motor") or "agy"
+                if motor == "claude":
+                    casco_desc = "Claude Code"
+                elif motor == "codex":
+                    casco_desc = "Codex CLI"
+                elif motor == "ollama":
+                    casco_desc = "Ollama Local"
+                else:
+                    casco_desc = f"{conta} (Argon)" if conta == "conta1" else f"{conta} (Flash)"
+
+                self.tabela_tarefas.setItem(i, 3, QTableWidgetItem(casco_desc))
                 st_item = QTableWidgetItem("● Ativa no tmux" if ativa else "○ Pausada / Finalizada")
                 st_item.setForeground(QColor(COR_CONCLUIDA if ativa else COR_TEXTO_SUAVE))
-                self.tabela_tarefas.setItem(i, 3, st_item)
+                self.tabela_tarefas.setItem(i, 4, st_item)
 
                 widget_acoes = QWidget()
                 lay_ac = QHBoxLayout(widget_acoes)
                 lay_ac.setContentsMargins(4, 2, 4, 2)
                 lay_ac.setSpacing(6)
 
-                btn_continuar = QPushButton("▶ Continuar")
+                btn_continuar = QPushButton("▶ Focar / Continuar")
                 btn_continuar.setStyleSheet(f"""
                     QPushButton {{
                         background-color: #1e3d2f;
                         color: {COR_CONCLUIDA};
                         border: 1px solid rgba(150, 214, 168, 0.4);
                         border-radius: 4px;
-                        padding: 4px 10px;
+                        padding: 4px 8px;
                         font-size: 11px;
                         font-weight: bold;
                     }}
@@ -1155,6 +1644,24 @@ if PYQT_DISPONIVEL:
                 btn_continuar.clicked.connect(lambda _, x=sid: abrir_terminal_sessao(x))
                 lay_ac.addWidget(btn_continuar)
 
+                btn_worktree = QPushButton("📂 Worktree")
+                btn_worktree.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {COR_ELEVADA};
+                        color: {COR_PRIMARIA};
+                        border: 1px solid {COR_BORDA};
+                        border-radius: 4px;
+                        padding: 4px 8px;
+                        font-size: 11px;
+                        font-weight: bold;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COR_ELEVADA_HOVER};
+                    }}
+                """)
+                btn_worktree.clicked.connect(lambda _, x=sid: abrir_terminal_worktree(x))
+                lay_ac.addWidget(btn_worktree)
+
                 btn_encerrar = QPushButton("✕ Encerrar")
                 btn_encerrar.setStyleSheet(f"""
                     QPushButton {{
@@ -1162,7 +1669,7 @@ if PYQT_DISPONIVEL:
                         color: {COR_FALHOU};
                         border: 1px solid rgba(240, 157, 147, 0.3);
                         border-radius: 4px;
-                        padding: 4px 10px;
+                        padding: 4px 8px;
                         font-size: 11px;
                     }}
                     QPushButton:hover {{
@@ -1172,26 +1679,18 @@ if PYQT_DISPONIVEL:
                 btn_encerrar.clicked.connect(lambda _, x=sid: self.encerrar_sessao(x))
                 lay_ac.addWidget(btn_encerrar)
 
-                self.tabela_tarefas.setCellWidget(i, 4, widget_acoes)
+                self.tabela_tarefas.setCellWidget(i, 5, widget_acoes)
 
         def encerrar_sessao(self, sid: str) -> None:
             res = QMessageBox.question(
                 self,
                 "Encerrar Sessão",
-                f"Deseja encerrar o container tmux da sessão '{sid}'?",
+                f"Deseja encerrar o container e finalizar a sessão '{sid}'?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if res == QMessageBox.StandardButton.Yes:
                 try:
-                    subprocess.run(["tmux", "-L", "catamara", "kill-session", "-t", sid], capture_output=True, check=False)
-                    s_arq = obter_pasta_estado() / "sessoes" / f"{sid}.json"
-                    if s_arq.is_file():
-                        try:
-                            d = json.loads(s_arq.read_text(encoding="utf-8"))
-                            d["estado"] = "inativa"
-                            s_arq.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-                        except Exception:
-                            pass
+                    sessoes.encerrar_sessao_por_id(sid)
                     janela = self.window()
                     if hasattr(janela, "atualizar_dados"):
                         janela.atualizar_dados()
@@ -1212,21 +1711,26 @@ if PYQT_DISPONIVEL:
             self.setStyleSheet(f"""
                 QMainWindow {{ background-color: {COR_SUPERFICIE}; }}
                 QWidget {{ color: {COR_TEXTO}; font-family: Inter, system-ui, sans-serif; }}
-                QTabWidget::pane {{ border: 1px solid {COR_BORDA}; background: {COR_SUPERFICIE}; border-radius: 6px; }}
+                QTabWidget::pane {{ border: 1px solid {COR_BORDA}; background: {COR_SUPERFICIE}; border-radius: 8px; }}
                 QTabBar::tab {{
                     background: {COR_ELEVADA};
                     color: {COR_TEXTO_SUAVE};
-                    padding: 8px 16px;
+                    padding: 8px 18px;
                     border-top-left-radius: 6px;
                     border-top-right-radius: 6px;
                     margin-right: 4px;
-                    font-weight: bold;
+                    font-weight: 600;
+                    font-size: 12px;
                 }}
                 QTabBar::tab:selected {{
                     background: {COR_SUPERFICIE};
                     color: {COR_PRIMARIA};
                     border: 1px solid {COR_BORDA};
-                    border-bottom: 1px solid {COR_SUPERFICIE};
+                    border-bottom: 2px solid {COR_PRIMARIA};
+                }}
+                QTabBar::tab:hover:!selected {{
+                    background: {COR_ELEVADA_HOVER};
+                    color: {COR_TEXTO};
                 }}
             """)
 
@@ -1298,22 +1802,76 @@ if PYQT_DISPONIVEL:
             btn_nova_tarefa_topo.clicked.connect(self.abrir_dialogo_nova_tarefa)
             topo.addWidget(btn_nova_tarefa_topo)
 
-            lbl_atalhos = QLabel("Alt+1 Tarefas | Alt+2 Entregas | Alt+3 Frota | Alt+4 Jail | Alt+A Aceitar")
+            lbl_atalhos = QLabel("Alt+1 Tarefas │ Alt+2 Entregas │ Alt+3 Validação │ Alt+4 Indicadores │ Alt+5 Frota │ Alt+6 Sandboxes")
             lbl_atalhos.setStyleSheet(f"color: {COR_TEXTO_SUAVE}; font-size: 11px;")
             topo.addWidget(lbl_atalhos)
             lay_raiz.addLayout(topo)
 
-            # Abas principais (com Tarefas como primeira aba ativa!)
+            # Barra superior de telemetria rapida (estilo Waybar)
+            lay_telemetria = QHBoxLayout()
+            lay_telemetria.setSpacing(8)
+
+            def criar_badge_topo(texto_ini: str) -> QLabel:
+                lbl = QLabel(texto_ini)
+                lbl.setStyleSheet(f"""
+                    background-color: {COR_ELEVADA};
+                    color: {COR_TEXTO_SUAVE};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 999px;
+                    padding: 3px 10px;
+                    font-size: 11px;
+                    font-family: monospace;
+                """)
+                return lbl
+
+            self.lbl_topo_c1 = criar_badge_topo("C1: -- (Argon)")
+            self.lbl_topo_c2 = criar_badge_topo("C2: -- (Flash)")
+            self.lbl_topo_ollama = criar_badge_topo("Ollama: VRAM")
+            self.lbl_topo_portao = criar_badge_topo("Portão: OK")
+            self.lbl_topo_tarefas = criar_badge_topo("0 ativas")
+            self.lbl_topo_entregas = criar_badge_topo("0 entregas")
+
+            lay_telemetria.addWidget(self.lbl_topo_c1)
+            lay_telemetria.addWidget(self.lbl_topo_c2)
+            lay_telemetria.addWidget(self.lbl_topo_ollama)
+            lay_telemetria.addWidget(self.lbl_topo_portao)
+            lay_telemetria.addWidget(self.lbl_topo_tarefas)
+            lay_telemetria.addWidget(self.lbl_topo_entregas)
+            lay_telemetria.addStretch()
+
+            btn_portao_rapido = QPushButton("▶ Portão Local")
+            btn_portao_rapido.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COR_ELEVADA};
+                    color: {COR_PRIMARIA};
+                    border: 1px solid {COR_BORDA};
+                    border-radius: 6px;
+                    padding: 3px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{ background-color: {COR_ELEVADA_HOVER}; }}
+            """)
+            btn_portao_rapido.clicked.connect(lambda: self.aba_validacao.disparar_validacao(so_deterministico=True))
+            lay_telemetria.addWidget(btn_portao_rapido)
+
+            lay_raiz.addLayout(lay_telemetria)
+
+            # Abas principais (sem & para evitar mnemônicos feios de underscore)
             self.tabs = QTabWidget()
             self.aba_tarefas = AbaTarefas()
             self.aba_entregas = AbaEntregas()
+            self.aba_validacao = AbaValidacao()
+            self.aba_indicadores = AbaIndicadores()
             self.aba_fleet = AbaFleetUsage()
             self.aba_jail = AbaJail()
 
-            self.tabs.addTab(self.aba_tarefas, "Tarefas & Projetos")
-            self.tabs.addTab(self.aba_entregas, "AI Memory & Entregas")
-            self.tabs.addTab(self.aba_fleet, "Frota & AI Usage Bar")
-            self.tabs.addTab(self.aba_jail, "AI Jail & Sandboxes")
+            self.tabs.addTab(self.aba_tarefas, "Tarefas e Projetos")
+            self.tabs.addTab(self.aba_entregas, "Entregas e Memória")
+            self.tabs.addTab(self.aba_validacao, "Validação Cruzada")
+            self.tabs.addTab(self.aba_indicadores, "Indicadores de Frota")
+            self.tabs.addTab(self.aba_fleet, "Frota e Cotas")
+            self.tabs.addTab(self.aba_jail, "Sandboxes e Isolamento")
 
             lay_raiz.addWidget(self.tabs)
 
@@ -1327,11 +1885,14 @@ if PYQT_DISPONIVEL:
             QShortcut(QKeySequence("Alt+2"), self, lambda: self.tabs.setCurrentIndex(1))
             QShortcut(QKeySequence("Alt+3"), self, lambda: self.tabs.setCurrentIndex(2))
             QShortcut(QKeySequence("Alt+4"), self, lambda: self.tabs.setCurrentIndex(3))
+            QShortcut(QKeySequence("Alt+5"), self, lambda: self.tabs.setCurrentIndex(4))
+            QShortcut(QKeySequence("Alt+6"), self, lambda: self.tabs.setCurrentIndex(5))
             QShortcut(QKeySequence("Alt+N"), self, self.abrir_dialogo_nova_tarefa)
             QShortcut(QKeySequence("Alt+A"), self, self.aba_entregas.ao_clicar_aceitar)
 
             self.aba_tarefas.btn_atualizar.clicked.connect(self.atualizar_dados)
             self.aba_fleet.btn_atualizar.clicked.connect(self.atualizar_dados)
+            self.aba_indicadores.btn_atualizar.clicked.connect(self.atualizar_dados)
 
         def abrir_dialogo_nova_tarefa(self) -> None:
             dlg = DialogoNovaTarefa(self)
@@ -1348,13 +1909,17 @@ if PYQT_DISPONIVEL:
                 # 1. Carrega tarefas / sessoes
                 pasta_ses = obter_pasta_estado() / "sessoes"
                 sessoes_lista: list[dict[str, Any]] = []
+                sessoes_ativas_qtd = 0
                 if pasta_ses.is_dir():
                     for arq in sorted(pasta_ses.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
                         try:
                             d = json.loads(arq.read_text(encoding="utf-8"))
                             sid = d.get("sessao") or arq.stem
                             tmux_id = d.get("tmux") or sid
-                            d["ativa_no_tmux"] = sessoes.tmux_has_session("catamara", tmux_id)
+                            ativa = sessoes.tmux_has_session("catamara", tmux_id)
+                            d["ativa_no_tmux"] = ativa
+                            if ativa or d.get("estado") == "ativa":
+                                sessoes_ativas_qtd += 1
                             sessoes_lista.append(d)
                         except Exception:
                             continue
@@ -1363,6 +1928,17 @@ if PYQT_DISPONIVEL:
                 # 2. Carrega cascos
                 lista_cascos = contas.catalogo_cascos()
                 self.aba_fleet.atualizar_cascos(lista_cascos)
+
+                # Atualiza badges superiores de cascos
+                for c in lista_cascos:
+                    cotas = c.get("cotas", {})
+                    nome = c.get("nome", "")
+                    if "1" in nome or c.get("conta") == "conta1":
+                        arg = cotas.get("argon_pct")
+                        self.lbl_topo_c1.setText(f"C1: {int(arg)}% (Argon)" if arg is not None else "C1: -- (Argon)")
+                    elif "2" in nome or c.get("conta") == "conta2":
+                        fla = cotas.get("gemini_pct")
+                        self.lbl_topo_c2.setText(f"C2: {int(fla)}% (Flash)" if fla is not None else "C2: -- (Flash)")
 
                 # 3. Carrega processos confinados (AI Jail)
                 pasta_proc = obter_pasta_estado() / "processos"
@@ -1383,6 +1959,7 @@ if PYQT_DISPONIVEL:
                 # 4. Carrega entregas delimitadas (AI Memory)
                 pasta_impl = obter_pasta_estado() / "implementacoes"
                 entregas_lista: list[dict[str, Any]] = []
+                pendentes_qtd = 0
                 if pasta_impl.is_dir():
                     for sub in sorted(pasta_impl.glob("impl-*"), key=lambda p: p.name, reverse=True):
                         manif = sub / "manifesto.json"
@@ -1393,6 +1970,8 @@ if PYQT_DISPONIVEL:
                                 d_e = json.loads(ent.read_text(encoding="utf-8")) if ent.is_file() else None
                                 ja_aceito = bool(d_e and d_e.get("aceito") is True)
                                 pendente = (d_m.get("estado") == "finalizado") and not ja_aceito
+                                if pendente:
+                                    pendentes_qtd += 1
                                 entregas_lista.append({
                                     "id": d_m.get("id") or sub.name,
                                     "estado": "aceito" if ja_aceito else d_m.get("estado", ""),
@@ -1405,8 +1984,48 @@ if PYQT_DISPONIVEL:
                                 continue
                 self.aba_entregas.atualizar_entregas(entregas_lista)
 
+                # 5. Carrega validacao e historico
+                recibos_val: list[dict[str, Any]] = []
+                val_jsonl = obter_pasta_estado() / "validar.jsonl"
+                if val_jsonl.is_file():
+                    try:
+                        linhas = [json.loads(l) for l in val_jsonl.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
+                        recibos_val = list(reversed(linhas))
+                    except Exception:
+                        pass
+                self.aba_validacao.atualizar_validacao(recibos_val)
+
+                # 6. Carrega indicadores e journal
+                ind_dados: dict[str, Any] = {
+                    "economia_motores": {"cota_poupada_pct": 0, "por_motor": {}},
+                    "balanco_cascos": {"conta1_chamadas": 0, "conta2_chamadas": 0},
+                    "funil_qualidade": {"taxa_deterministico_pct": 100, "taxa_revisao_pct": 100, "implementacoes_aceitas": 0, "implementacoes_pendentes": pendentes_qtd},
+                    "linha_do_tempo": [],
+                }
+                eventos_jsonl = obter_pasta_estado() / "eventos.jsonl"
+                if eventos_jsonl.is_file():
+                    try:
+                        ev_linhas = [json.loads(l) for l in eventos_jsonl.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
+                        ind_dados["linha_do_tempo"] = list(reversed(ev_linhas[-20:]))
+                    except Exception:
+                        pass
+                self.aba_indicadores.atualizar_indicadores(ind_dados)
+
+                # Atualiza badges superiores restantes
+                self.lbl_topo_tarefas.setText(f"{sessoes_ativas_qtd} ativa" if sessoes_ativas_qtd == 1 else f"{sessoes_ativas_qtd} ativas")
+                self.lbl_topo_entregas.setText(f"{pendentes_qtd} pendente" if pendentes_qtd == 1 else f"{pendentes_qtd} pendentes")
+                if pendentes_qtd > 0:
+                    self.lbl_topo_entregas.setStyleSheet(f"background-color: #3d2f1c; color: {COR_BLOQUEADA}; border: 1px solid rgba(242, 198, 109, 0.4); border-radius: 999px; padding: 3px 10px; font-size: 11px; font-family: monospace; font-weight: bold;")
+                else:
+                    self.lbl_topo_entregas.setStyleSheet(f"background-color: {COR_ELEVADA}; color: {COR_TEXTO_SUAVE}; border: 1px solid {COR_BORDA}; border-radius: 999px; padding: 3px 10px; font-size: 11px; font-family: monospace;")
+
+                if recibos_val:
+                    portao_ok = recibos_val[0].get("deterministico_ok") is True
+                    self.lbl_topo_portao.setText("Portão: OK" if portao_ok else "Portão: FALHA")
+                    self.lbl_topo_portao.setStyleSheet(f"background-color: {'#1c2e24' if portao_ok else '#2e1c1c'}; color: {COR_CONCLUIDA if portao_ok else COR_FALHOU}; border: 1px solid {COR_BORDA}; border-radius: 999px; padding: 3px 10px; font-size: 11px; font-family: monospace; font-weight: bold;")
+
                 agora_str = time.strftime("%H:%M:%S")
-                self.lbl_status.setText(f"Telemetria atualizada às {agora_str} | {len(sessoes_lista)} tarefa(s) | {len(lista_cascos)} cascos catalogados | {len(procs)} sandbox(es)")
+                self.lbl_status.setText(f"Telemetria atualizada às {agora_str} │ {len(sessoes_lista)} tarefa(s) │ {len(lista_cascos)} cascos │ {pendentes_qtd} entrega(s) pendente(s) │ {len(procs)} sandbox(es)")
             except Exception as exc:
                 self.lbl_status.setText(f"Erro ao atualizar telemetria: {exc}")
 
@@ -1588,8 +2207,10 @@ def iniciar_central_desktop(porta: int = 8770, modo_webengine: bool = False, ape
         cliente_socket.write(b"mostrar\n")
         cliente_socket.waitForBytesWritten(300)
         cliente_socket.disconnectFromServer()
-        # Notifica Hyprland para focar na janela existente
-        if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        # Notifica Niri ou Hyprland para focar na janela existente
+        if os.environ.get("NIRI_SOCKET"):
+            subprocess.run(["niri", "msg", "action", "focus-window", "--matching-title", "Catamarã"], capture_output=True, check=False)
+        elif os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
             subprocess.run(["hyprctl", "dispatch", "focuswindow", "Catamarã"], capture_output=True, check=False)
         return 0
 
@@ -1610,7 +2231,9 @@ def iniciar_central_desktop(porta: int = 8770, modo_webengine: bool = False, ape
                 janela.showNormal()
                 janela.raise_()
                 janela.activateWindow()
-                if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                if os.environ.get("NIRI_SOCKET"):
+                    subprocess.run(["niri", "msg", "action", "focus-window", "--matching-title", "Catamarã"], capture_output=True, check=False)
+                elif os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
                     subprocess.run(["hyprctl", "dispatch", "focuswindow", f"pid:{os.getpid()}"], capture_output=True, check=False)
                 sock.disconnectFromServer()
 

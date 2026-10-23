@@ -381,6 +381,84 @@ def listar_projetos_locais() -> list[dict[str, str]]:
     return projetos
 
 
+def abrir_terminal_generico(titulo: str, classe: str, cmd_args: list[str], cwd: Path | str | None = None) -> bool:
+    """Abre um terminal grafico detectando os emuladores instalados no sistema."""
+    candidatos = [
+        "jangada-terminal",
+        "alacritty",
+        "ghostty",
+        "kitty",
+        "foot",
+        "wezterm",
+        "konsole",
+        "x-terminal-emulator",
+        "xterm",
+    ]
+    for term in candidatos:
+        bin_path = shutil.which(term)
+        if not bin_path:
+            continue
+        if term == "jangada-terminal":
+            cmd = [bin_path, "--classe", classe, "--titulo", titulo, "-e"] + cmd_args
+        elif term in {"kitty", "ghostty", "foot"}:
+            cmd = [bin_path, "--title", titulo] + cmd_args
+        elif term == "alacritty":
+            cmd = [bin_path, "--class", classe, "--title", titulo, "-e"] + cmd_args
+        elif term == "wezterm":
+            cmd = [bin_path, "start", "--class", classe, "--"] + cmd_args
+        else:
+            cmd = [bin_path, "-e"] + cmd_args
+        try:
+            subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def focar_ou_abrir_sessao(sid: str) -> bool:
+    """Tenta focar a janela da sessao no Niri ou Hyprland, ou abre o terminal se nao encontrada."""
+    # 1. Tenta Niri
+    if os.environ.get("NIRI_SOCKET"):
+        try:
+            proc = subprocess.run(
+                ["niri", "msg", "action", "focus-window", "--matching-title", f"Catamara: {sid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # 2. Tenta Hyprland
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        try:
+            proc1 = subprocess.run(
+                ["hyprctl", "dispatch", "focuswindow", f"^catamara-sessao-{sid}$"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc1.returncode == 0 and "ok" in proc1.stdout.lower() and "warning" not in proc1.stdout.lower():
+                return True
+            proc2 = subprocess.run(
+                ["hyprctl", "dispatch", "focuswindow", f"title:^Catamara: {sid}$"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc2.returncode == 0 and "ok" in proc2.stdout.lower() and "warning" not in proc2.stdout.lower():
+                return True
+        except Exception:
+            pass
+
+    # 3. Fallback: abre terminal com cata continuar
+    cmd_cata = [str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid]
+    return abrir_terminal_generico(f"Catamara: {sid}", f"catamara-sessao-{sid}", cmd_cata)
+
+
 class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
     """Handler HTTP com endpoints REST para o painel."""
 
@@ -513,14 +591,7 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
 
                 if abrir_term:
                     sid = res["sessao"]
-                    term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
-                    term_cmd = [
-                        term_bin,
-                        "--classe", f"catamara-sessao-{sid}",
-                        "--titulo", f"Catamara: {sid}",
-                        "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
-                    ]
-                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    focar_ou_abrir_sessao(sid)
 
                 self._enviar_json({"ok": True, "sessao": res})
             except Exception as exc:
@@ -535,40 +606,7 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                     self._enviar_erro("campo 'sessao' obrigatorio", status=400)
                     return
 
-                focado = False
-                try:
-                    # 1. Tenta focuswindow nativo por classe
-                    proc_foco1 = subprocess.run(
-                        ["hyprctl", "dispatch", "focuswindow", f"^catamara-sessao-{sid}$"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if proc_foco1.returncode == 0 and "ok" in proc_foco1.stdout.lower() and "warning" not in proc_foco1.stdout.lower():
-                        focado = True
-                    else:
-                        # 2. Tenta por título
-                        proc_foco2 = subprocess.run(
-                            ["hyprctl", "dispatch", "focuswindow", f"title:^Catamara: {sid}$"],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                        )
-                        if proc_foco2.returncode == 0 and "ok" in proc_foco2.stdout.lower() and "warning" not in proc_foco2.stdout.lower():
-                            focado = True
-                except Exception:
-                    pass
-
-                if not focado:
-                    term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
-                    term_cmd = [
-                        term_bin,
-                        "--classe", f"catamara-sessao-{sid}",
-                        "--titulo", f"Catamara: {sid}",
-                        "-e", str(RAIZ_CATAMARA / "bin" / "cata"), "continuar", sid,
-                    ]
-                    subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-
+                focado = focar_ou_abrir_sessao(sid)
                 self._enviar_json({"ok": True, "sessao": sid, "focado": focado})
             except Exception as exc:
                 self._enviar_erro(f"falha ao focar sessao: {exc}", status=500)
@@ -593,17 +631,30 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                     self._enviar_erro("worktree nao encontrada", status=404)
                     return
 
-                term_bin = shutil.which("jangada-terminal") or "jangada-terminal"
-                term_cmd = [
-                    term_bin,
-                    "--classe", f"catamara-worktree-{sid}",
-                    "--titulo", f"Worktree: {sid}",
-                    "-e", "bash", "-c", f"cd '{wt_dir}' && exec bash",
-                ]
-                subprocess.Popen(term_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                self._enviar_json({"ok": True, "worktree": wt_dir})
+                aberto = abrir_terminal_generico(
+                    titulo=f"Worktree: {sid}",
+                    classe=f"catamara-worktree-{sid}",
+                    cmd_args=["bash"],
+                    cwd=wt_dir,
+                )
+                self._enviar_json({"ok": aberto, "worktree": wt_dir})
             except Exception as exc:
                 self._enviar_erro(f"falha ao abrir worktree: {exc}", status=500)
+            return
+
+        if rota == "/api/fotos/abrir":
+            try:
+                dados = self._ler_corpo_json()
+                caminho = dados.get("caminho")
+                if not caminho:
+                    pasta_fotos = estado_dir() / "fotos"
+                    caminho = str(pasta_fotos)
+                p = Path(os.path.expanduser(caminho))
+                p.mkdir(parents=True, exist_ok=True)
+                subprocess.Popen(["xdg-open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                self._enviar_json({"ok": True, "aberto": str(p)})
+            except Exception as exc:
+                self._enviar_erro(f"falha ao abrir foto: {exc}", status=500)
             return
 
         if rota == "/api/sessoes/encerrar":
@@ -661,6 +712,8 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                 cmd = [str(RAIZ_CATAMARA / "bin" / "catamara-validar"), "--json"]
                 if so_det:
                     cmd.append("--so-deterministico")
+
+                alvo_encontrado = None
                 if sid:
                     sessao_json = estado_dir() / "sessoes" / f"{sid}.json"
                     if sessao_json.is_file():
@@ -668,13 +721,35 @@ class RequisicaoPainelHandler(http.server.SimpleHTTPRequestHandler):
                             s_data = json.loads(sessao_json.read_text(encoding="utf-8"))
                             alvo = s_data.get("worktree") or s_data.get("repo")
                             if alvo and Path(alvo).exists():
-                                cmd.extend(["--repo", str(alvo)])
+                                alvo_encontrado = str(alvo)
                             if s_data.get("conta"):
                                 cmd.extend(["--conta-autor", str(s_data["conta"])])
                         except Exception:
                             pass
                 elif dados.get("repo"):
-                    cmd.extend(["--repo", str(dados.get("repo"))])
+                    alvo_encontrado = str(dados.get("repo"))
+
+                if not alvo_encontrado:
+                    # Tenta obter a pasta da sessao ativa mais recente ou raiz do Catamara
+                    pasta_ses = estado_dir() / "sessoes"
+                    if pasta_ses.is_dir():
+                        for arq in sorted(pasta_ses.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                            try:
+                                d = json.loads(arq.read_text(encoding="utf-8"))
+                                if d.get("estado") == "ativa":
+                                    cand = d.get("worktree") or d.get("repo")
+                                    if cand and Path(cand).exists():
+                                        alvo_encontrado = str(cand)
+                                        if d.get("conta"):
+                                            cmd.extend(["--conta-autor", str(d["conta"])])
+                                        break
+                            except Exception:
+                                continue
+
+                if not alvo_encontrado or not Path(alvo_encontrado).exists():
+                    alvo_encontrado = str(RAIZ_CATAMARA)
+
+                cmd.extend(["--repo", alvo_encontrado])
 
                 proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 notificar_waybar()

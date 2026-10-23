@@ -1997,8 +1997,21 @@
       }
     }
 
-    function verFotoCongelada() {
-      showToast(`Foto congelada em ~/.local/state/catamara/fotos/`, "📸");
+    async function verFotoCongelada() {
+      showToast(`Abrindo pasta de fotos congeladas...`, "📸");
+      try {
+        const resp = await fetch('/api/fotos/abrir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const res = await resp.json();
+        if (res.ok) {
+          showToast(`Pasta de fotos aberta: ${res.aberto}`, "✓");
+        }
+      } catch (err) {
+        showToast(`Foto congelada em ~/.local/state/catamara/fotos/`, "📸");
+      }
     }
 
     async function carregarProjetos() {

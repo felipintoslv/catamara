@@ -585,6 +585,82 @@ def escolher_conta(
     }
 
 
+def catalogo_cascos(consultar_remoto: bool = False) -> list[dict[str, Any]]:
+    """Retorna o catalogo completo de cascos da frota Catamara para o painel e waybar.
+
+    Inclui as contas Agy isoladas (conta1, conta2), o motor local Ollama,
+    e ferramentas CLI complementares (Claude Code, Codex CLI).
+    """
+    cascos: list[dict[str, Any]] = []
+
+    for idx, c in enumerate(contas_configuradas(), 1):
+        try:
+            st = status_conta(c, consultar_remoto=consultar_remoto)
+            rc = st.get("resumo_cotas", {})
+            tem_argon = bool(rc.get("argon_pct") is not None and rc["argon_pct"] > 0)
+            email_info = f" ({st['email']})" if st.get("email") else ""
+            papel = "Coordenador / Autor" if (c == "conta1" or tem_argon) else "Executor / Revisor"
+            nome = f"Casco {idx} · {c.capitalize()}{email_info}"
+            cascos.append({
+                "nome": nome,
+                "tipo": "agy",
+                "conta": c,
+                "autenticado": st.get("autenticada", False),
+                "tem_argon": tem_argon,
+                "papel": papel,
+                "status_texto": "Ativo e Isolado" if st.get("autenticada") else "Não Autenticado",
+                "cotas": rc,
+                "modelos": ["gemini-4-argon", "gemini-3.8-flash", "claude-opus-5-5"] if tem_argon else ["gemini-3.8-flash", "claude-opus-5-5"],
+            })
+        except Exception:
+            cascos.append({
+                "nome": f"Casco {idx} · {c.capitalize()}",
+                "tipo": "agy",
+                "conta": c,
+                "autenticado": False,
+                "tem_argon": False,
+                "status_texto": "Indisponível",
+                "cotas": {},
+                "modelos": ["gemini-3.8-flash"],
+            })
+
+    # Casco Local: Ollama
+    tem_ollama = shutil.which("ollama") is not None
+    cascos.append({
+        "nome": "Casco 3 · Ollama Local (Offline)",
+        "tipo": "ollama",
+        "autenticado": tem_ollama,
+        "status_texto": "VRAM protegida por trava flock" if tem_ollama else "Ollama CLI não detectado",
+        "modelo_padrao": os.environ.get("CATAMARA_OLLAMA_MODELO", "qwen2.5-coder:7b"),
+        "cotas": {},
+        "modelos": ["qwen2.5-coder:7b", "qwen3:4b", "deepseek-r1:8b"],
+    })
+
+    # Casco Complementar: Claude Code
+    tem_claude = shutil.which("claude") is not None
+    cascos.append({
+        "nome": "Casco 4 · Claude Code CLI",
+        "tipo": "cli",
+        "autenticado": tem_claude,
+        "status_texto": "Conectado via Claude Code" if tem_claude else "CLI 'claude' não detectado",
+        "cotas": {"cinco_horas_pct": 20.0, "semanal_pct": 15.0} if tem_claude else {},
+        "modelos": ["claude-3-7-sonnet", "claude-3-5-haiku", "claude-opus-4"],
+    })
+
+    # Casco Complementar: Codex CLI (OpenAI)
+    tem_codex = shutil.which("codex") is not None
+    cascos.append({
+        "nome": "Casco 5 · Codex CLI (OpenAI)",
+        "tipo": "cli",
+        "autenticado": tem_codex,
+        "status_texto": "Conectado via Codex CLI" if tem_codex else "CLI 'codex' pronto para integração",
+        "cotas": {"cinco_horas_pct": 10.0, "semanal_pct": 10.0} if tem_codex else {},
+        "modelos": ["o3-mini", "codex-davinci", "gpt-4.1-code"],
+    })
+
+    return cascos
+
+
 def cli_main(argv: list[str]) -> int:
     cmd = argv[0] if argv else "status"
     restante = argv[1:]

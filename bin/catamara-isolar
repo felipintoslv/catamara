@@ -378,8 +378,20 @@ if [[ "$modo_mostrar" -eq 0 ]]; then
   mkdir -p "$pasta_conta_alvo/bin" 2>/dev/null || true
 fi
 if [[ -d "$HOME/.gemini/antigravity-cli/bin" ]]; then
-  bwrap_args+=(--ro-bind "$HOME/.gemini/antigravity-cli/bin" "$HOME/.gemini/antigravity-cli/bin")
+  bwrap_args+=(--bind "$HOME/.gemini/antigravity-cli/bin" "$HOME/.gemini/antigravity-cli/bin")
 fi
+
+# Permite acesso as configuracoes e sessoes do Claude Code e Codex CLI quando presentes
+for app_dir in "$HOME/.claude" "$HOME/.codex" "$HOME/.config/claude" "$HOME/.config/codex" "$HOME/.config/claude-code"; do
+  if [[ -d "$app_dir" ]]; then
+    bwrap_args+=(--bind "$app_dir" "$app_dir")
+  fi
+done
+for app_file in "$HOME/.claude.json" "$HOME/.codex.json"; do
+  if [[ -f "$app_file" ]]; then
+    bwrap_args+=(--bind "$app_file" "$app_file")
+  fi
+done
 
 if [[ "$modo_mostrar" -eq 0 ]]; then
   mkdir -p "$CATAMARA_ESTADO/marcas" "$CATAMARA_SESSOES" "$CATAMARA_ESTADO/cotas" 2>/dev/null || true

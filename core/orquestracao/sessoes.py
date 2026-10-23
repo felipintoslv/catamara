@@ -224,6 +224,7 @@ def criar_e_iniciar_sessao(
     dry_run: bool = False,
     sem_tmux: bool = False,
     criar_se_nao_existir: bool = True,
+    motor: str = "agy",
 ) -> dict[str, Any]:
     dirs = obter_diretorios()
     repo_str = str(repo).strip()
@@ -307,6 +308,7 @@ def criar_e_iniciar_sessao(
         "tmux": tmux_nome,
         "criado": data_iso_atual(),
         "estado": "ativa",
+        "motor": motor,
     }
 
     if not dry_run:
@@ -318,6 +320,16 @@ def criar_e_iniciar_sessao(
 
     catamara_isolar = dirs["path"] / "bin" / "catamara-isolar"
     modelo_esforco = f"{autor_modelo}-{autor_esforco}"
+
+    if motor == "claude":
+        cmd_exec = ["claude"]
+    elif motor == "codex":
+        cmd_exec = ["codex"]
+    elif motor == "ollama":
+        cmd_exec = ["ollama", "run", os.environ.get("CATAMARA_OLLAMA_MODELO", "qwen2.5-coder:7b")]
+    else:
+        cmd_exec = ["agy", "--model", modelo_esforco, "--effort", autor_esforco]
+
     cmd_interno = [
         str(catamara_isolar),
         "--conta",
@@ -325,11 +337,7 @@ def criar_e_iniciar_sessao(
         "--perfil",
         "agente",
         "--",
-        "agy",
-        "--model",
-        modelo_esforco,
-        "--effort",
-        autor_esforco,
+        *cmd_exec,
     ]
     cmd_str = shlex.join(cmd_interno)
     dados_sessao["comando"] = cmd_str
@@ -371,6 +379,7 @@ def subcomando_iniciar(args: argparse.Namespace) -> int:
             forcar=args.forcar,
             dry_run=args.dry_run,
             sem_tmux=getattr(args, "sem_tmux", False),
+            motor=getattr(args, "motor", "agy"),
         )
     except Exception as exc:
         print(f"Erro: {exc}", file=sys.stderr)
@@ -561,6 +570,13 @@ def main(argv: list[str] | None = None) -> int:
     p_iniciar.add_argument("--repo", dest="repo", default=None, help="Caminho do repositorio Git")
     p_iniciar.add_argument("--sessao", dest="sessao", default=None, help="Identificador da sessao")
     p_iniciar.add_argument("--conta", dest="conta", default=None, help="Conta a ser utilizada")
+    p_iniciar.add_argument(
+        "--motor",
+        dest="motor",
+        choices=["agy", "claude", "codex", "ollama"],
+        default="agy",
+        help="Motor ou CLI inicial (agy, claude, codex, ollama)",
+    )
     p_iniciar.add_argument(
         "--direto",
         dest="direto",
